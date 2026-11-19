@@ -1,6 +1,6 @@
 // Uygulama kabuğunu önbelleğe alır; uygulama hızlı açılır.
 // API çağrıları önbelleğe alınmaz.
-const CACHE = 'ingilizce-v4';
+const CACHE = 'ingilizce-v5';
 const SHELL = [
   './',
   './index.html',
@@ -36,13 +36,15 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;
+  // HTTP önbelleğini atla: her açılışta sunucuya güncel sürümü sor
   e.respondWith(
-    fetch(e.request)
+    fetch(e.request.url, { cache: 'no-cache', credentials: 'same-origin' })
       .then((res) => {
+        if (!res.ok) throw new Error('status ' + res.status);
         const copy = res.clone();
         caches.open(CACHE).then((c) => c.put(e.request, copy));
         return res;
       })
-      .catch(() => caches.match(e.request))
+      .catch(() => caches.match(e.request, { ignoreSearch: true }))
   );
 });
