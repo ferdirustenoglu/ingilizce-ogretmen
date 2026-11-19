@@ -1,9 +1,10 @@
 import { TOPICS, CATEGORIES, LEVELS, topicById, levelGroup } from './topics.js';
 import {
   loadSettings, saveSettings, loadProfile, loadStudy, saveStudy,
-  loadSavedStudies, saveSavedStudies, exportAll, importAll, db,
+  loadSavedStudies, saveSavedStudies, exportAll, importAll, db, loadCosts, today,
 } from './db.js';
 import { testApiKey } from './openai.js';
+import { renderLesson, leaveLesson, previewVoice } from './lesson.js';
 
 // ---------- Uygulama durumu ----------
 const state = {
@@ -56,11 +57,14 @@ const ICON = {
 };
 
 // ---------- Yönlendirme ----------
-const ROUTES = { home: renderHome, study: renderStudy, progress: renderProgress, settings: renderSettings, lesson: renderLesson };
+const ROUTES = { home: renderHome, study: renderStudy, progress: renderProgress, settings: renderSettings, lesson: () => renderLesson({ app, state, esc, toast, ICON }) };
+let currentRoute = null;
 
 function route() {
   const name = (location.hash || '#home').slice(1);
   const render = ROUTES[name] || renderHome;
+  if (currentRoute === 'lesson' && name !== 'lesson') leaveLesson();
+  currentRoute = name;
   document.querySelectorAll('.nav a').forEach((a) => {
     if (a.dataset.tab === name) a.setAttribute('aria-current', 'page');
     else a.removeAttribute('aria-current');
@@ -71,8 +75,12 @@ function route() {
 }
 
 // ---------- Ana Sayfa ----------
-function renderHome() {
+async function renderHome() {
   const { profile, study, settings } = state;
+  const costs = await loadCosts();
+  const todayCost = costs.days[today()] || 0;
+  const lessonSaved = await db.get('lesson');
+  const hasLesson = lessonSaved && lessonSaved.messages && lessonSaved.messages.length;
   const topics = study.topics.map(topicById).filter(Boolean);
   const modeLabel = settings.voiceMode === 'realtime' ? 'Canlı Sohbet' : 'Bas-Konuş';
 
@@ -96,8 +104,8 @@ function renderHome() {
     </section>
 
     <div style="display:flex; flex-direction:column; gap:10px">
-      <a class="btn btn-primary btn-big" href="#lesson">${ICON.mic} Derse Başla</a>
-      <a class="btn" href="#lesson">${ICON.plus} Yeni Ders</a>
+      <a class="btn btn-primary btn-big" href="#lesson">${ICON.mic} ${hasLesson ? 'Derse Devam Et' : 'Derse Başla'}</a>
+      ${hasLesson ? `<button type="button" class="btn" id="homeNew">${ICON.plus} Yeni Ders</button>` : ''}
     </div>
 
     <section class="card">
@@ -111,19 +119,26 @@ function renderHome() {
       <p class="small">${study.words.length} kelime</p>
     </section>
 
+    <div class="grid-3">
+      <div class="stat"><b>${profile.sentenceCount || 0}</b><span>toplam cümle</span></div>
+      <div class="stat"><b>${study.words.length}</b><span>hedef kelime</span></div>
+      <div class="stat"><b>$${todayCost.toFixed(2)}</b><span>bugün maliyet</span></div>
+    </div>
+
     <div class="row small" style="gap:6px">${settings.voiceMode === 'realtime' ? ICON.bolt : ICON.micSmall} Ses modu: ${modeLabel} · Model: ${settings.modelSize === 'mini' ? 'Mini' : 'Büyük'}</div>
   </div>`;
+
+  app.querySelector('#homeNew')?.addEventListener('click', async () => {
+    if (!confirm('Mevcut ders bitsin ve yeni ders başlasın mı?')) return;
+    const l = await db.get('lesson');
+    const archive = (await db.get('lessons')) || [];
+    archive.unshift({ ...l, endedAt: new Date().toISOString() });
+    await db.set('lessons', archive.slice(0, 30));
+    await db.del('lesson');
+    location.hash = '#lesson';
+  });
 }
 
-// ---------- Ders (Aşama 2'de gelecek) ----------
-function renderLesson() {
-  app.innerHTML = `
-  <div class="page">
-    <h1>Ders</h1>
-    <div class="note">Ders ekranı Aşama 2'de eklenecek. Şu an uygulamanın iskeleti, Çalışma ve Ayarlar ekranları çalışıyor.</div>
-    <a class="btn" href="#home">Ana Sayfaya dön</a>
-  </div>`;
-}
 
 // ---------- İlerleme (Aşama 5'te gelecek) ----------
 function renderProgress() {
@@ -423,7 +438,7 @@ function renderSettings() {
       <select id="voice" class="select">
         ${VOICES.map(([v, label]) => `<option value="${v}" ${s.voice === v ? 'selected' : ''}>${label}</option>`).join('')}
       </select>
-      <p class="small">Sesi dinleme düğmesi Aşama 2'de eklenecek.</p>
+      <button type="button" class="btn btn-small" id="previewVoice">Sesi dinle</button>
     </section>
 
     <section class="card">
@@ -449,6 +464,12 @@ function renderSettings() {
     </section>
 
     <section class="card">
+      <h2>Tahmini harcama</h2>
+      <div class="grid-3" id="costBox"></div>
+      <p class="small">Yaklaşık değerlerdir. Kesin tutar OpenAI panelindedir.</p>
+    </section>
+
+    <section class="card">
       <h2>Veri</h2>
       <p class="small">Tüm bilgilerin bu telefonun tarayıcısında saklanır. Arada bir yedek almanı öneririm.</p>
       <button type="button" class="btn" id="exportBtn">Yedeği dışa aktar</button>
@@ -459,10 +480,18 @@ function renderSettings() {
       <button type="button" class="btn btn-danger" id="resetAll">Tüm verileri sıfırla</button>
     </section>
 
-    <p class="small" style="text-align:center">İngilizce Öğretmen · Aşama 1</p>
+    <p class="small" style="text-align:center">İngilizce Öğretmen · Aşama 2</p>
   </div>`;
 
   const persist = () => saveSettings(state.settings);
+
+  loadCosts().then((c) => {
+    const month = today().slice(0, 7);
+    const monthSum = Object.entries(c.days).filter(([d]) => d.startsWith(month)).reduce((a, [, v]) => a + v, 0);
+    const box = app.querySelector('#costBox');
+    if (box) box.innerHTML = [['Bugün', c.days[today()] || 0], ['Bu ay', monthSum], ['Toplam', c.total]]
+      .map(([l, v]) => `<div class="stat" style="background:var(--bg)"><b style="font-size:17px">$${v.toFixed(2)}</b><span>${l}</span></div>`).join('');
+  });
 
   const keyInput = app.querySelector('#apiKey');
   keyInput.addEventListener('change', async () => {
@@ -522,6 +551,13 @@ function renderSettings() {
   app.querySelector('#voice').addEventListener('change', async (e) => {
     s.voice = e.target.value;
     await persist();
+  });
+  app.querySelector('#previewVoice').addEventListener('click', async (e) => {
+    if (!s.apiKey) { toast('Önce API anahtarını gir.'); return; }
+    e.target.disabled = true;
+    try { await previewVoice(s, state.profile.level); }
+    catch (err) { toast(err.message); }
+    e.target.disabled = false;
   });
   app.querySelector('#autoLevel').addEventListener('change', async (e) => {
     s.autoLevel = e.target.checked;

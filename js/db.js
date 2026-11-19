@@ -83,6 +83,23 @@ export async function loadSavedStudies() {
 }
 export const saveSavedStudies = (list) => db.set('savedStudies', list);
 
+// Tahmini harcama kaydı: { total, days: { 'YYYY-MM-DD': usd } }
+export const today = () => {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+};
+export async function loadCosts() {
+  return (await db.get('costs')) || { total: 0, days: {} };
+}
+export async function addCost(usd) {
+  if (!usd) return;
+  const c = await loadCosts();
+  const k = today();
+  c.days[k] = (c.days[k] || 0) + usd;
+  c.total += usd;
+  await db.set('costs', c);
+}
+
 // Yedekleme: tüm verileri tek JSON dosyasına çevir / geri yükle
 export async function exportAll() {
   const keys = await db.keys();
