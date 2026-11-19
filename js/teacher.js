@@ -25,15 +25,22 @@ export function speedOf(settings, level) {
 
 export function ttsInstructions(settings, level) {
   const pace = {
-    slow: 'Speak slowly and very clearly, with short pauses between sentences.',
-    normal: 'Speak at a moderate, clear pace.',
-    fast: 'Speak at a natural conversational pace.',
+    slow: 'Speak VERY slowly, like dictating to a beginner: say each word separately and clearly, with a small pause between words and a longer pause after each sentence.',
+    normal: 'Speak at a normal, natural pace, clearly.',
+    fast: 'Speak at a natural, fairly fast conversational pace, like a native speaker talking to a friend.',
   }[speedOf(settings, level)];
   return 'You are a warm, friendly and patient English teacher in a one-to-one lesson. ' + pace +
-    ' Use clear standard pronunciation. When quoting the student\'s sentence or the corrected sentence, say it slightly more slowly.';
+    ' Use clear standard pronunciation. When quoting the student\'s sentence or the corrected sentence, say it a little more slowly.';
 }
 
-export function buildTeacherSystem({ settings, profile, study }) {
+// Telefonda çalma hızı (ses tonu korunur)
+export function playbackRate(settings, level) {
+  return { slow: 0.85, normal: 1, fast: 1.08 }[speedOf(settings, level)];
+}
+
+export function buildTeacherSystem({ settings, profile, study }, extras = {}) {
+  const focus = extras.focus || [];
+  const review = extras.review || [];
   const topics = study.topics.map(topicById).filter(Boolean).map((t) => `${t.title} (${t.level})`);
   const words = study.words;
   const important = settings.correction === 'important';
@@ -53,6 +60,10 @@ ${topics.length ? `- Grammar/situation topics: ${topics.join('; ')}.
   Ask questions that REQUIRE the student to use these structures. At the start of the lesson introduce the focus with 2-3 very short examples, then start practising.` : '- No topic chosen: free conversation about everyday life, work and interests.'}
 ${words.length ? `- Target words: ${words.join(', ')}.
   Steer the conversation so the student uses each word. Prefer words not used yet. If a topic needs a specific form (e.g. past tense), expect it (e.g. "went" for "go").` : ''}
+${review.length ? `- Review words from earlier days (lower priority, mix in naturally): ${review.join(', ')}.` : ''}
+${focus.length ? `- The student often made these mistakes in earlier lessons: ${focus.map((m) => `"${m.key}" (e.g. said "${m.original}" instead of "${m.corrected}")`).join('; ')}.
+  Naturally create 1-2 chances in this lesson for the student to use these structures correctly. Do not lecture about them unless the student repeats the mistake.` : ''}
+${profile.levelNotice ? `- NEWS: the student's level just changed from ${profile.levelNotice.from} to ${profile.levelNotice.to}. Mention it in ONE short, encouraging sentence at the start of your reply, then continue.` : ''}
 
 CORRECTIONS
 - After each student turn check grammar, word choice and naturalness. Ignore punctuation, capitalization and obvious speech-to-text glitches.

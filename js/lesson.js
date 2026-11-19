@@ -2,9 +2,12 @@
 // Akış: basılı tut → kayıt → yazıya çevir → önizleme (Gönder/İptal) → öğretmen cevabı → seslendirme
 
 import { db, saveProfile, addCost } from './db.js';
-import { topicById } from './topics.js';
+import { topicById, LEVELS as LEVELS_ORDER } from './topics.js';
 import { chatJSON, transcribe, speak, transcribeCost, ttsCost } from './openai.js';
-import { buildTeacherSystem, ttsInstructions } from './teacher.js';
+import { buildTeacherSystem, ttsInstructions, playbackRate } from './teacher.js';
+import {
+  analyzeSentence, pickFocusMistakes, pickReviewWords, registerWords, recordWordUse, loadMistakes,
+} from './analysis.js';
 
 let ctx = null; // { app, state, esc, toast, ICON }
 let lesson = null;
@@ -23,9 +26,20 @@ const HISTORY_LIMIT = 24;
 
 const newLesson = () => ({ id: Date.now(), startedAt: new Date().toISOString(), messages: [], wordStatus: {}, cost: 0 });
 
+// Yeni ders: odak hatalar ve tekrar kelimeleri seçilir
+async function prepareLesson(l) {
+  const words = ctx.state.study.words;
+  await registerWords(words);
+  l.focusMistakes = await pickFocusMistakes(2);
+  l.reviewWords = await pickReviewWords(words, 5);
+  return l;
+}
+
+const allTargets = () => [...ctx.state.study.words, ...(lesson.reviewWords || [])];
+
 export async function renderLesson(c) {
   ctx = c;
-  lesson = (await db.get('lesson')) || newLesson();
+  lesson = (await db.get('lesson')) || (await prepareLesson(newLesson()));
   status = 'idle';
   pending = null;
   lastError = null;
@@ -131,13 +145,15 @@ function drawChips() {
   const box = ctx.app.querySelector('#chips');
   if (!box) return;
   const words = ctx.state.study.words;
-  if (!words.length) { box.innerHTML = ''; return; }
+  const review = lesson.reviewWords || [];
+  if (!words.length && !review.length) { box.innerHTML = ''; return; }
   const ok = words.filter((w) => lesson.wordStatus[w.toLowerCase()] === 'ok').length;
   box.innerHTML = `
-    <div class="row-between small" style="font-weight:600"><span>Günün kelimeleri</span><span>${ok} / ${words.length}</span></div>
-    <div class="chip-row">${words.map((w) => {
+    <div class="row-between small" style="font-weight:600"><span>Günün kelimeleri${review.length ? ` <span style="color:var(--accent-text)">+ ${review.length} tekrar</span>` : ''}</span><span>${ok} / ${words.length}</span></div>
+    <div class="chip-row">${[...words, ...review].map((w, i) => {
+      const isReview = i >= words.length;
       const s = lesson.wordStatus[w.toLowerCase()];
-      const cls = s === 'ok' ? 'chip chip-ok' : s === 'bad' ? 'chip chip-bad' : 'chip';
+      const cls = (s === 'ok' ? 'chip chip-ok' : s === 'bad' ? 'chip chip-bad' : 'chip') + (isReview && !s ? ' chip-review' : '');
       const mark = s === 'ok' ? ' ✓' : s === 'bad' ? ' !' : '';
       return `<span class="${cls}">${ctx.esc(w)}${mark}</span>`;
     }).join('')}</div>`;
@@ -259,7 +275,11 @@ async function sendPending() {
   if (!pending) return;
   const msg = { id: Date.now(), role: 'student', text: pending.text };
   pending = null;
+  const prevTeacher = [...lesson.messages].reverse().find((m) => m.role === 'teacher')?.text;
   lesson.messages.push(msg);
+  if (ctx.state.settings.apiKey) {
+    analyzeSentence(ctx.state, { text: msg.text, prevTeacher, lessonId: lesson.id }, (r) => onAnalysis(msg.id, r));
+  }
   ctx.state.profile.sentenceCount = (ctx.state.profile.sentenceCount || 0) + 1;
   await saveProfile(ctx.state.profile);
   await saveLesson();
@@ -282,7 +302,10 @@ async function teacherTurn() {
   }));
   if (!lesson.messages.length) history.push({ role: 'user', content: '[START_LESSON]' });
 
-  const messages = [{ role: 'system', content: buildTeacherSystem(state) }, ...history];
+  const bank = await loadMistakes();
+  const focus = (lesson.focusMistakes || []).map((id) => bank.find((m) => m.id === id)).filter((m) => m && m.status === 'active');
+  const notice = state.profile.levelNotice;
+  const messages = [{ role: 'system', content: buildTeacherSystem(state, { focus, review: lesson.reviewWords || [] }) }, ...history];
 
   let data;
   try {
@@ -302,16 +325,24 @@ async function teacherTurn() {
   if (last && last.role === 'student' && data.correction && data.correction.corrected) {
     last.correction = data.correction;
   }
+  // Seviye haberi bir kez söylendi
+  if (notice && state.profile.levelNotice === notice) {
+    delete state.profile.levelNotice;
+    await saveProfile(state.profile);
+  }
   // Kelime durumlarını güncelle
-  const targets = new Set(state.study.words.map((w) => w.toLowerCase()));
+  const targets = new Set(allTargets().map((w) => w.toLowerCase()));
+  const okW = [];
+  const badW = [];
   (data.words_used_ok || []).forEach((w) => {
     const k = String(w).toLowerCase();
-    if (targets.has(k)) lesson.wordStatus[k] = 'ok';
+    if (targets.has(k)) { lesson.wordStatus[k] = 'ok'; okW.push(k); }
   });
   (data.words_used_wrong || []).forEach((w) => {
     const k = String(w).toLowerCase();
-    if (targets.has(k) && lesson.wordStatus[k] !== 'ok') lesson.wordStatus[k] = 'bad';
+    if (targets.has(k)) { badW.push(k); if (lesson.wordStatus[k] !== 'ok') lesson.wordStatus[k] = 'bad'; }
   });
+  recordWordUse(okW, badW);
 
   const tmsg = { id: Date.now(), role: 'teacher', text: reply };
   lesson.messages.push(tmsg);
@@ -338,6 +369,8 @@ async function say(msg) {
       });
     }
     audio = new Audio(url);
+    audio.preservesPitch = true;
+    audio.playbackRate = playbackRate(state.settings, state.profile.level);
     audio.addEventListener('ended', () => { if (status === 'speaking') setStatus('idle'); });
     await audio.play();
   } catch (err) {
@@ -356,6 +389,24 @@ function stopAudio() {
   if (audio) {
     audio.pause();
     audio = null;
+  }
+}
+
+// ---------- Analiz sonucu ----------
+async function onAnalysis(msgId, r) {
+  if (!r || !lesson) return;
+  const msg = lesson.messages.find((m) => m.id === msgId);
+  if (msg) msg.scores = r.scores;
+  lesson.mistakesAdded = (lesson.mistakesAdded || 0) + r.added.length;
+  lesson.mistakesLearned = [...(lesson.mistakesLearned || []), ...r.learned.map((m) => m.key)];
+  await saveLesson();
+  if (r.levelChange) {
+    const up = LEVELS_ORDER.indexOf(r.levelChange.to) > LEVELS_ORDER.indexOf(r.levelChange.from);
+    ctx.toast((up ? 'Seviye atladın: ' : 'Seviye ayarlandı: ') + r.levelChange.from + ' → ' + r.levelChange.to);
+    const pill = ctx.app.querySelector('.lvl-pill');
+    if (pill) pill.textContent = r.levelChange.to;
+  } else if (r.learned.length) {
+    ctx.toast('Öğrenildi: ' + r.learned[0].corrected);
   }
 }
 
@@ -382,7 +433,7 @@ async function startNewLesson() {
   }
   audioUrls.forEach((u) => URL.revokeObjectURL(u));
   audioUrls.clear();
-  lesson = newLesson();
+  lesson = await prepareLesson(newLesson());
   pending = null;
   lastError = null;
   await saveLesson();
@@ -394,6 +445,8 @@ async function startNewLesson() {
 export async function previewVoice(settings, level) {
   const blob = await speak(settings, "Hello! I'm your English teacher. Let's practise speaking together.", ttsInstructions(settings, level));
   const a = new Audio(URL.createObjectURL(blob));
+  a.preservesPitch = true;
+  a.playbackRate = playbackRate(settings, level);
   await a.play();
   await addCost(ttsCost(4));
 }

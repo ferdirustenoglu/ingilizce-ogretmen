@@ -287,3 +287,4 @@ p { margin: 0; }
 .talk-rec { background: var(--green); color: #0B2A1C; animation: pulse 1.2s infinite; }
 @keyframes pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(61, 214, 140, 0.5); } 50% { box-shadow: 0 0 0 12px rgba(61, 214, 140, 0); } }
 .talk-status { margin: 0; font-size: 13px; font-weight: 600; color: var(--muted); min-height: 18px; text-align: center; }
+.chip-review { border-style: dashed; border-color: #5B68C9; color: var(--accent-text); }

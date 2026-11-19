@@ -5,6 +5,7 @@ import {
 } from './db.js';
 import { testApiKey } from './openai.js';
 import { renderLesson, leaveLesson, previewVoice } from './lesson.js';
+import { levelProgress } from './analysis.js';
 
 // ---------- Uygulama durumu ----------
 const state = {
@@ -81,6 +82,7 @@ async function renderHome() {
   const todayCost = costs.days[today()] || 0;
   const lessonSaved = await db.get('lesson');
   const hasLesson = lessonSaved && lessonSaved.messages && lessonSaved.messages.length;
+  const prog = levelProgress(profile);
   const topics = study.topics.map(topicById).filter(Boolean);
   const modeLabel = settings.voiceMode === 'realtime' ? 'Canlı Sohbet' : 'Bas-Konuş';
 
@@ -97,9 +99,9 @@ async function renderHome() {
       <div class="level-badge">${esc(profile.level)}</div>
       <div style="flex:1; display:flex; flex-direction:column; gap:8px">
         <p class="small" style="font-weight:600">Seviyen</p>
-        <p style="font-size:15px; font-weight:600">${esc(nextLevel(profile.level))}'e ilerleme</p>
-        <div class="bar"><div style="width:0%"></div></div>
-        <p class="small">${profile.sentenceCount ? `Toplam ${profile.sentenceCount} cümle` : 'Seviyen ilk derste ölçülecek'}</p>
+        <p style="font-size:15px; font-weight:600">${profile.placementDone ? esc(nextLevel(profile.level)) + "'e ilerleme" : 'Seviye belirleniyor'}</p>
+        <div class="bar"><div style="width:${prog.pct}%"></div></div>
+        <p class="small">${profile.sentenceCount ? esc(prog.text) : 'Seviyen ilk derste ölçülecek'}</p>
       </div>
     </section>
 
@@ -480,7 +482,7 @@ function renderSettings() {
       <button type="button" class="btn btn-danger" id="resetAll">Tüm verileri sıfırla</button>
     </section>
 
-    <p class="small" style="text-align:center">İngilizce Öğretmen · Aşama 2</p>
+    <p class="small" style="text-align:center">İngilizce Öğretmen · Aşama 3</p>
   </div>`;
 
   const persist = () => saveSettings(state.settings);

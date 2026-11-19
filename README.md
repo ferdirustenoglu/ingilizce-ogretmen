@@ -9,4 +9,4 @@ Sesli İngilizce konuşma pratiği uygulaması (Android için PWA). Arkada OpenA
 
 API anahtarı sadece telefonda saklanır; bu depoda yoktur.
 
-**Durum:** Aşama 2 – Bas-Konuş ile ders
+**Durum:** Aşama 3 – seviye sistemi, hata bankası, kelime tekrarı
