@@ -100,7 +100,7 @@ export async function recordWordUse(okWords, badWords) {
 }
 
 // ---------- Cümle analizi ----------
-function analysisPrompt(profile, study, bank) {
+function analysisPrompt(profile, study, bank, targets = []) {
   const topics = study.topics.map(topicById).filter(Boolean).map((t) => t.title);
   return `You are an expert English examiner analysing ONE spoken sentence from an adult Turkish learner (speech-to-text transcript: ignore punctuation, capitalization and obvious transcription glitches).
 Student's current level: ${profile.level} (scale: ${LEVELS.join(', ')}).
@@ -113,7 +113,8 @@ List real mistakes only (max 3). For each: "type" (one of: ${Object.keys(MISTAKE
 ${bank.length ? `Known mistakes from earlier lessons (id: rule):
 ${bank.map((m) => `${m.id}: ${m.key}`).join('\n')}
 "bank_correct": ids the student used CORRECTLY in this sentence (the structure actually appears and is right). "bank_repeated": ids the student got wrong again.` : 'There are no known earlier mistakes: return empty "bank_correct" and "bank_repeated".'}
-Return ONLY JSON: {"scores":{"accuracy":0,"vocabulary":0,"complexity":0,"naturalness":0},"estimated_level":"A1","mistakes":[],"bank_correct":[],"bank_repeated":[]}`;
+${targets.length ? `Target words: ${targets.join(', ')}. "words_used_ok": target words the student used correctly in this sentence (any correct form counts, e.g. "went" for "go" when past is needed). "words_used_wrong": target words used wrongly.` : 'No target words: return empty "words_used_ok" and "words_used_wrong".'}
+Return ONLY JSON: {"scores":{"accuracy":0,"vocabulary":0,"complexity":0,"naturalness":0},"estimated_level":"A1","mistakes":[],"bank_correct":[],"bank_repeated":[],"words_used_ok":[],"words_used_wrong":[]}`;
 }
 
 async function callAnalysis(settings, system, user) {
@@ -143,19 +144,19 @@ async function callAnalysis(settings, system, user) {
 // Analizler sırayla işlenir (profil güncellemeleri karışmasın)
 let queue = Promise.resolve();
 
-export function analyzeSentence(state, { text, prevTeacher, lessonId }, onResult) {
-  queue = queue.then(() => runAnalysis(state, { text, prevTeacher, lessonId }).then(onResult)).catch((e) => {
+export function analyzeSentence(state, args, onResult) {
+  queue = queue.then(() => runAnalysis(state, args).then(onResult)).catch((e) => {
     console.warn('analysis failed', e);
   });
   return queue;
 }
 
-async function runAnalysis(state, { text, prevTeacher, lessonId }) {
+async function runAnalysis(state, { text, prevTeacher, lessonId, targets = [] }) {
   const { settings, profile, study } = state;
   const all = await loadMistakes();
   const bank = all.filter((m) => m.status === 'active').slice(0, 15);
   const user = (prevTeacher ? `Teacher asked: "${prevTeacher}"\n` : '') + `Student said: "${text}"`;
-  const { data, cost } = await callAnalysis(settings, analysisPrompt(profile, study, bank), user);
+  const { data, cost } = await callAnalysis(settings, analysisPrompt(profile, study, bank, targets), user);
   await addCost(cost);
 
   const sc = data.scores || {};
@@ -220,7 +221,13 @@ async function runAnalysis(state, { text, prevTeacher, lessonId }) {
   const levelChange = settings.autoLevel ? updateLevel(profile, scores.avg, data.estimated_level) : null;
   await saveProfile(profile);
 
-  return { scores, estimated: data.estimated_level, added, learned, levelChange };
+  const firstMistake = (data.mistakes || []).find((m) => m && m.corrected);
+  return {
+    scores, estimated: data.estimated_level, added, learned, levelChange,
+    mistake: firstMistake || null,
+    wordsOk: (data.words_used_ok || []).map(String),
+    wordsBad: (data.words_used_wrong || []).map(String),
+  };
 }
 
 const clamp = (v) => (Number.isFinite(v) ? Math.max(0, Math.min(100, Math.round(v))) : 60);

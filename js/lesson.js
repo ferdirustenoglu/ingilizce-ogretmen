@@ -1,58 +1,96 @@
-// Ders ekranı – Aşama 2: Bas-Konuş modu
-// Akış: basılı tut → kayıt → yazıya çevir → önizleme (Gönder/İptal) → öğretmen cevabı → seslendirme
+// Ders ekranı: iki mod
+//  - Bas-Konuş (ptt): basılı tut → kayıt → yazıya çevir → önizleme → öğretmen (JSON) → seslendirme
+//  - Canlı Sohbet (live): Realtime API ile WebRTC üzerinden doğrudan sesli sohbet
 
 import { db, saveProfile, addCost } from './db.js';
-import { topicById, LEVELS as LEVELS_ORDER } from './topics.js';
+import { topicById, LEVELS } from './topics.js';
 import { chatJSON, transcribe, speak, transcribeCost, ttsCost } from './openai.js';
-import { buildTeacherSystem, ttsInstructions, playbackRate } from './teacher.js';
+import { buildTeacherSystem, ttsInstructions, playbackRate, realtimeSpeed, liveSpeechStyle } from './teacher.js';
 import {
   analyzeSentence, pickFocusMistakes, pickReviewWords, registerWords, recordWordUse, loadMistakes,
 } from './analysis.js';
+import { connectRealtime } from './realtime.js';
 
 let ctx = null; // { app, state, esc, toast, ICON }
 let lesson = null;
+let mode = 'ptt';
+let lastError = null;
+
+// Bas-Konuş durumu
 let stream = null;
 let recorder = null;
 let chunks = [];
 let recStart = 0;
 let recording = false;
 let audio = null;
-let status = 'idle'; // idle | recording | transcribing | preview | thinking | speaking | error
-let pending = null; // { text }
-let lastError = null;
-const audioUrls = new Map(); // mesaj id → ses adresi (tekrar dinlemek için)
+let status = 'idle'; // idle | recording | transcribing | preview | thinking | speaking
+let pending = null;
+const audioUrls = new Map();
+
+// Canlı Sohbet durumu
+let rt = null;
+let liveStatus = 'idle'; // connecting | live | paused | error
+let speaking = false;
+let listening = false;
+let noticeSent = null;
+let drawQueued = false;
 
 const HISTORY_LIMIT = 24;
 
-const newLesson = () => ({ id: Date.now(), startedAt: new Date().toISOString(), messages: [], wordStatus: {}, cost: 0 });
+const newLesson = () => ({
+  id: Date.now(), startedAt: new Date().toISOString(), messages: [], wordStatus: {}, cost: 0,
+});
 
-// Yeni ders: odak hatalar ve tekrar kelimeleri seçilir
 async function prepareLesson(l) {
   const words = ctx.state.study.words;
   await registerWords(words);
   l.focusMistakes = await pickFocusMistakes(2);
   l.reviewWords = await pickReviewWords(words, 5);
+  l.levelStart = ctx.state.profile.level;
+  l.topics = [...ctx.state.study.topics];
+  l.words = [...words];
   return l;
 }
 
 const allTargets = () => [...ctx.state.study.words, ...(lesson.reviewWords || [])];
 
+// ---------- Giriş / çıkış ----------
 export async function renderLesson(c) {
   ctx = c;
+  mode = ctx.state.settings.voiceMode === 'realtime' ? 'live' : 'ptt';
   lesson = (await db.get('lesson')) || (await prepareLesson(newLesson()));
+  if (!lesson.levelStart) lesson.levelStart = ctx.state.profile.level;
+  await saveLesson();
   status = 'idle';
   pending = null;
   lastError = null;
+  liveStatus = 'idle';
+  speaking = false;
+  listening = false;
   draw();
-  await openMic();
-  if (!lesson.messages.length) teacherTurn();
+  if (!ctx.state.settings.apiKey) {
+    lastError = 'API anahtarı yok. Ayarlar’dan gir.';
+    drawMessages();
+    return;
+  }
+  if (mode === 'live') {
+    connectLive();
+  } else {
+    await openMic();
+    if (!lesson.messages.length) teacherTurn();
+  }
 }
 
-// Dersten çıkarken mikrofonu ve sesi kapat
 export function leaveLesson() {
   stopAudio();
   if (recorder && recorder.state !== 'inactive') recorder.stop();
   recording = false;
+  closeLive();
+  stopStream();
+  liveStatus = 'idle';
+}
+
+function stopStream() {
   if (stream) stream.getTracks().forEach((t) => t.stop());
   stream = null;
 }
@@ -61,9 +99,7 @@ export function leaveLesson() {
 function draw() {
   const { app, state, esc, ICON } = ctx;
   const topics = state.study.topics.map(topicById).filter(Boolean);
-  const realtimeNote = state.settings.voiceMode === 'realtime'
-    ? `<div class="note" style="margin:0 16px">Canlı Sohbet modu Aşama 4'te gelecek. Şimdilik ders Bas-Konuş ile yapılıyor.</div>`
-    : '';
+  const modeChip = mode === 'live' ? `${ICON.bolt} Canlı Sohbet` : `${ICON.micSmall} Bas-Konuş`;
 
   app.innerHTML = `
   <div class="lesson">
@@ -72,49 +108,44 @@ function draw() {
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>
       </a>
       <span class="lvl-pill">${esc(state.profile.level)}</span>
-      <span class="mode-chip">${ICON.micSmall} Bas-Konuş</span>
+      <span class="mode-chip">${modeChip}</span>
       <span style="flex:1"></span>
-      <button type="button" class="btn btn-small" id="newLesson">Yeni Ders</button>
+      <button type="button" class="btn btn-small" id="endLesson">Dersi Bitir</button>
     </header>
     <div class="lesson-topic">${topics.length ? esc(topics.map((t) => t.title).join(' · ')) : 'Serbest sohbet'}</div>
-    ${realtimeNote}
     <div class="msgs" id="msgs"></div>
     <section class="chips" id="chips" aria-label="Günün kelimeleri"></section>
     <div id="preview"></div>
-    <footer class="lesson-foot">
-      <button type="button" class="talk" id="talk"></button>
-      <p class="talk-status" id="talkStatus" aria-live="polite"></p>
-    </footer>
+    <footer class="lesson-foot" id="foot"></footer>
   </div>`;
 
   drawMessages();
   drawChips();
   drawPreview();
-  drawTalk();
+  drawFooter();
+  app.querySelector('#endLesson').addEventListener('click', endLesson);
+}
 
-  app.querySelector('#newLesson').addEventListener('click', startNewLesson);
-
-  const talk = app.querySelector('#talk');
-  talk.addEventListener('contextmenu', (e) => e.preventDefault());
-  talk.addEventListener('pointerdown', onPress);
-  talk.addEventListener('pointerup', onRelease);
-  talk.addEventListener('pointercancel', onRelease);
-  talk.addEventListener('pointerleave', () => { if (recording) onRelease(); });
+function scheduleDraw() {
+  if (drawQueued) return;
+  drawQueued = true;
+  requestAnimationFrame(() => { drawQueued = false; drawMessages(); });
 }
 
 function drawMessages() {
   const box = ctx.app.querySelector('#msgs');
-  if (!box) return;
+  if (!box || !lesson) return;
   const { esc } = ctx;
   const html = lesson.messages.map((m) => {
     if (m.role === 'teacher') {
-      return `<div class="bubble bubble-t">
-        <span>${esc(m.text)}</span>
-        <button type="button" class="replay" data-replay="${m.id}" aria-label="Tekrar dinle">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg>
-        </button>
-      </div>`;
+      const replayBtn = mode === 'ptt'
+        ? `<button type="button" class="replay" data-replay="${m.id}" aria-label="Tekrar dinle">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg>
+          </button>`
+        : '';
+      return `<div class="bubble bubble-t"><span>${esc(m.text) || '…'}</span>${replayBtn}</div>`;
     }
+    if (m.pending) return '<div class="bubble bubble-s typing" aria-label="Söylediğin yazıya çevriliyor"><span></span><span></span><span></span></div>';
     const c = m.correction;
     return `<div class="bubble bubble-s">${esc(m.text)}</div>
       ${c ? `<div class="corr">
@@ -128,22 +159,28 @@ function drawMessages() {
       </div>` : ''}`;
   }).join('');
 
-  const thinking = status === 'thinking'
+  const thinking = mode === 'ptt' && status === 'thinking'
     ? '<div class="bubble bubble-t typing" aria-label="Öğretmen düşünüyor"><span></span><span></span><span></span></div>'
     : '';
   const err = lastError
-    ? `<div class="err-box"><p>${esc(lastError)}</p><button type="button" class="btn btn-small" id="retry">Tekrar dene</button></div>`
+    ? `<div class="err-box"><p>${esc(lastError)}</p>${ctx.state.settings.apiKey ? '<button type="button" class="btn btn-small" id="retry">Tekrar dene</button>' : '<a class="btn btn-small" href="#settings">Ayarlara git</a>'}</div>`
+    : '';
+  const connecting = !lesson.messages.length && !err && mode === 'live' && liveStatus === 'connecting'
+    ? '<p class="muted" style="text-align:center; margin-top:24px">Öğretmene bağlanılıyor…</p>'
     : '';
 
-  box.innerHTML = html + thinking + err;
+  box.innerHTML = html + thinking + err + connecting;
   box.querySelectorAll('[data-replay]').forEach((b) => b.addEventListener('click', () => replay(+b.dataset.replay)));
-  box.querySelector('#retry')?.addEventListener('click', () => { lastError = null; teacherTurn(); });
+  box.querySelector('#retry')?.addEventListener('click', () => {
+    lastError = null;
+    if (mode === 'live') connectLive(); else teacherTurn();
+  });
   box.scrollTop = box.scrollHeight;
 }
 
 function drawChips() {
   const box = ctx.app.querySelector('#chips');
-  if (!box) return;
+  if (!box || !lesson) return;
   const words = ctx.state.study.words;
   const review = lesson.reviewWords || [];
   if (!words.length && !review.length) { box.innerHTML = ''; return; }
@@ -162,7 +199,7 @@ function drawChips() {
 function drawPreview() {
   const box = ctx.app.querySelector('#preview');
   if (!box) return;
-  if (status !== 'preview' || !pending) { box.innerHTML = ''; return; }
+  if (mode !== 'ptt' || status !== 'preview' || !pending) { box.innerHTML = ''; return; }
   box.innerHTML = `
     <section class="preview" aria-label="Gönderilmeden önce önizleme">
       <p class="small" style="color:var(--accent-text); font-weight:700">Anladığım cümle — doğru mu?</p>
@@ -176,52 +213,97 @@ function drawPreview() {
   box.querySelector('#send').addEventListener('click', sendPending);
 }
 
-function drawTalk() {
-  const talk = ctx.app.querySelector('#talk');
-  const st = ctx.app.querySelector('#talkStatus');
-  if (!talk) return;
+function drawFooter() {
+  const foot = ctx.app.querySelector('#foot');
+  if (!foot) return;
+  if (mode === 'live') { drawLiveFooter(foot); return; }
+
   const labels = {
     idle: ['Basılı tut ve konuş', 'Bırakınca cümlen yazıya çevrilir'],
     recording: ['Dinliyorum…', 'Bitince parmağını kaldır'],
     transcribing: ['Yazıya çeviriyorum…', ''],
     preview: ['Basılı tut ve yeniden söyle', 'Ya da yukarıdan gönder'],
     thinking: ['Öğretmen düşünüyor…', ''],
-    speaking: ['Durdur', 'Öğretmen konuşuyor'],
-    error: ['Basılı tut ve konuş', ''],
+    speaking: ['Basılı tut ve konuş', 'Öğretmen konuşuyor · basarsan susar'],
   };
   const [label, sub] = labels[status] || labels.idle;
-  talk.innerHTML = (status === 'speaking'
-    ? '<svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>'
-    : ctx.ICON.mic.replace('width="22" height="22"', 'width="28" height="28"')) + `<span>${label}</span>`;
+  const icon = ctx.ICON.mic.replace('width="22" height="22"', 'width="28" height="28"');
+
+  let talk = foot.querySelector('#talk');
+  if (!talk) {
+    foot.innerHTML = '<button type="button" class="talk" id="talk"></button><p class="talk-status" id="talkStatus" aria-live="polite"></p>';
+    talk = foot.querySelector('#talk');
+    talk.addEventListener('contextmenu', (e) => e.preventDefault());
+    talk.addEventListener('pointerdown', onPress);
+    talk.addEventListener('pointerup', onRelease);
+    talk.addEventListener('pointercancel', onRelease);
+    talk.addEventListener('pointerleave', () => { if (recording) onRelease(); });
+  }
+  talk.innerHTML = icon + `<span>${label}</span>`;
   talk.className = 'talk' + (status === 'recording' ? ' talk-rec' : '');
   talk.disabled = status === 'transcribing' || status === 'thinking';
-  st.textContent = stream ? sub : 'Mikrofon izni gerekiyor: düğmeye bas';
+  foot.querySelector('#talkStatus').textContent = stream ? sub : 'Mikrofon izni gerekiyor: düğmeye bas';
+}
+
+function drawLiveFooter(foot) {
+  let label;
+  let sub;
+  let cls = 'live-btn';
+  let icon;
+  const pauseIcon = '<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M9 5v14M15 5v14"/></svg>';
+  const playIcon = '<svg width="30" height="30" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>';
+  const micIcon = ctx.ICON.mic.replace('width="22" height="22"', 'width="30" height="30"');
+  if (liveStatus === 'connecting') {
+    label = 'Bağlanıyor'; sub = 'Öğretmene bağlanılıyor…'; icon = micIcon; cls += ' live-wait';
+  } else if (liveStatus === 'live') {
+    label = 'Duraklat'; icon = pauseIcon;
+    if (speaking) { sub = 'Öğretmen konuşuyor · istersen sözünü kesebilirsin'; cls += ' live-speak'; }
+    else if (listening) { sub = 'Seni dinliyorum…'; cls += ' live-listen'; }
+    else sub = 'Konuşabilirsin · duraklatmak için dokun';
+  } else {
+    label = 'Devam Et'; icon = playIcon;
+    sub = liveStatus === 'error' ? 'Bağlantı durdu · devam etmek için dokun' : (liveStatus === 'paused' ? 'Ders duraklatıldı · ücret yazmıyor' : 'Başlamak için dokun');
+  }
+  foot.innerHTML = `
+    <div class="live-wrap">
+      <span class="wave ${listening || speaking ? 'wave-on' : ''}" aria-hidden="true"><i></i><i></i><i></i></span>
+      <button type="button" class="${cls}" id="liveBtn" aria-label="${label}" ${liveStatus === 'connecting' ? 'disabled' : ''}>${icon}</button>
+      <span class="wave ${listening || speaking ? 'wave-on' : ''}" aria-hidden="true"><i></i><i></i><i></i></span>
+    </div>
+    <p class="talk-status" aria-live="polite">${sub}</p>`;
+  foot.querySelector('#liveBtn').addEventListener('click', () => {
+    if (liveStatus === 'live') pauseLive();
+    else if (liveStatus !== 'connecting') { lastError = null; drawMessages(); connectLive(); }
+  });
 }
 
 function setStatus(s) {
   status = s;
-  drawTalk();
+  drawFooter();
   drawPreview();
   if (s === 'thinking' || s === 'idle') drawMessages();
 }
 
-// ---------- Mikrofon ----------
+// ======================================================================
+// Bas-Konuş
+// ======================================================================
 async function openMic() {
   if (stream) return true;
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
-    drawTalk();
+    drawFooter();
     return true;
-  } catch (e) {
+  } catch {
     ctx.toast('Mikrofona erişilemedi. Tarayıcı izinlerini kontrol et.');
-    drawTalk();
+    drawFooter();
     return false;
   }
 }
 
 async function onPress(e) {
   e.preventDefault();
-  if (status === 'speaking') { stopAudio(); setStatus('idle'); return; }
+  // Öğretmen konuşurken basılırsa: sesi kes ve hemen kayda başla
+  if (status === 'speaking') stopAudio();
   if (status === 'transcribing' || status === 'thinking') return;
   if (!stream) { await openMic(); return; }
   try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* yok */ }
@@ -244,6 +326,7 @@ function onRelease() {
 }
 
 async function onRecordStop() {
+  if (!ctx || mode !== 'ptt' || !lesson || !ctx.app.querySelector('#talk')) return;
   const seconds = (performance.now() - recStart) / 1000;
   const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
   if (seconds < 0.6 || blob.size < 1000) {
@@ -252,9 +335,10 @@ async function onRecordStop() {
     return;
   }
   setStatus('transcribing');
-  const { settings, study } = ctx.state;
+  const { settings } = ctx.state;
   try {
-    const hint = 'An English learner speaking English.' + (study.words.length ? ' Words: ' + study.words.join(', ') + '.' : '');
+    const targets = allTargets();
+    const hint = 'An English learner speaking English.' + (targets.length ? ' Words: ' + targets.join(', ') + '.' : '');
     const text = await transcribe(settings, blob, hint);
     await addLessonCost(transcribeCost(seconds));
     if (!text) {
@@ -270,20 +354,32 @@ async function onRecordStop() {
   }
 }
 
-// ---------- Öğretmen ----------
 async function sendPending() {
   if (!pending) return;
   const msg = { id: Date.now(), role: 'student', text: pending.text };
   pending = null;
   const prevTeacher = [...lesson.messages].reverse().find((m) => m.role === 'teacher')?.text;
   lesson.messages.push(msg);
-  if (ctx.state.settings.apiKey) {
-    analyzeSentence(ctx.state, { text: msg.text, prevTeacher, lessonId: lesson.id }, (r) => onAnalysis(msg.id, r));
-  }
-  ctx.state.profile.sentenceCount = (ctx.state.profile.sentenceCount || 0) + 1;
-  await saveProfile(ctx.state.profile);
+  await countSentence();
+  runAnalysis(msg, prevTeacher);
   await saveLesson();
   teacherTurn();
+}
+
+async function teacherSystem(live) {
+  const { state } = ctx;
+  const bank = await loadMistakes();
+  const focus = (lesson.focusMistakes || []).map((id) => bank.find((m) => m.id === id)).filter((m) => m && m.status === 'active');
+  let sys = buildTeacherSystem(state, { focus, review: lesson.reviewWords || [], live });
+  if (live) {
+    sys += '\n\n' + liveSpeechStyle(state.settings, state.profile.level);
+    if (lesson.messages.length) {
+      const recent = lesson.messages.filter((m) => m.text && !m.pending).slice(-12)
+        .map((m) => (m.role === 'teacher' ? 'Teacher: ' : 'Student: ') + m.text).join('\n');
+      sys += `\n\nCONVERSATION SO FAR (the lesson was paused; continue from here, do not start a new lesson):\n${recent}`;
+    }
+  }
+  return sys;
 }
 
 async function teacherTurn() {
@@ -295,17 +391,15 @@ async function teacherTurn() {
   }
   lastError = null;
   setStatus('thinking');
+  const myLesson = lesson;
 
   const history = lesson.messages.slice(-HISTORY_LIMIT).map((m) => ({
     role: m.role === 'teacher' ? 'assistant' : 'user',
     content: m.text,
   }));
   if (!lesson.messages.length) history.push({ role: 'user', content: '[START_LESSON]' });
-
-  const bank = await loadMistakes();
-  const focus = (lesson.focusMistakes || []).map((id) => bank.find((m) => m.id === id)).filter((m) => m && m.status === 'active');
   const notice = state.profile.levelNotice;
-  const messages = [{ role: 'system', content: buildTeacherSystem(state, { focus, review: lesson.reviewWords || [] }) }, ...history];
+  const messages = [{ role: 'system', content: await teacherSystem(false) }, ...history];
 
   let data;
   try {
@@ -313,40 +407,28 @@ async function teacherTurn() {
     data = r.data;
     await addLessonCost(r.cost);
   } catch (err) {
+    if (myLesson !== lesson) return;
     lastError = err.message;
     setStatus('idle');
     return;
   }
+  if (!ctx || mode !== 'ptt' || myLesson !== lesson) return;
 
   const reply = String(data.reply || '').trim() || 'Sorry, could you say that again?';
-
-  // Son öğrenci mesajına düzeltmeyi ekle
   const last = lesson.messages[lesson.messages.length - 1];
   if (last && last.role === 'student' && data.correction && data.correction.corrected) {
     last.correction = data.correction;
   }
-  // Seviye haberi bir kez söylendi
   if (notice && state.profile.levelNotice === notice) {
     delete state.profile.levelNotice;
     await saveProfile(state.profile);
   }
-  // Kelime durumlarını güncelle
-  const targets = new Set(allTargets().map((w) => w.toLowerCase()));
-  const okW = [];
-  const badW = [];
-  (data.words_used_ok || []).forEach((w) => {
-    const k = String(w).toLowerCase();
-    if (targets.has(k)) { lesson.wordStatus[k] = 'ok'; okW.push(k); }
-  });
-  (data.words_used_wrong || []).forEach((w) => {
-    const k = String(w).toLowerCase();
-    if (targets.has(k)) { badW.push(k); if (lesson.wordStatus[k] !== 'ok') lesson.wordStatus[k] = 'bad'; }
-  });
-  recordWordUse(okW, badW);
+  applyWords(data.words_used_ok || [], data.words_used_wrong || []);
 
   const tmsg = { id: Date.now(), role: 'teacher', text: reply };
   lesson.messages.push(tmsg);
   await saveLesson();
+  if (!ctx.app.querySelector('#msgs')) return; // kullanıcı ekrandan çıktı
   drawMessages();
   drawChips();
   await say(tmsg);
@@ -362,12 +444,12 @@ async function say(msg) {
       const blob = await speak(state.settings, msg.text, ttsInstructions(state.settings, state.profile.level));
       url = URL.createObjectURL(blob);
       audioUrls.set(msg.id, url);
-      // Süre bilinince maliyeti ekle
       const probe = new Audio(url);
       probe.addEventListener('loadedmetadata', () => {
         if (isFinite(probe.duration)) addLessonCost(ttsCost(probe.duration));
       });
     }
+    if (!ctx || mode !== 'ptt' || status !== 'speaking' || !ctx.app.querySelector('#talk')) return;
     audio = new Audio(url);
     audio.preservesPitch = true;
     audio.playbackRate = playbackRate(state.settings, state.profile.level);
@@ -392,53 +474,273 @@ function stopAudio() {
   }
 }
 
-// ---------- Analiz sonucu ----------
-async function onAnalysis(msgId, r) {
-  if (!r || !lesson) return;
-  const msg = lesson.messages.find((m) => m.id === msgId);
-  if (msg) msg.scores = r.scores;
-  lesson.mistakesAdded = (lesson.mistakesAdded || 0) + r.added.length;
-  lesson.mistakesLearned = [...(lesson.mistakesLearned || []), ...r.learned.map((m) => m.key)];
+// ======================================================================
+// Canlı Sohbet
+// ======================================================================
+async function connectLive() {
+  const { state } = ctx;
+  if (rt || liveStatus === 'connecting') return;
+  liveStatus = 'connecting';
+  drawFooter();
+  drawMessages();
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+  } catch {
+    liveStatus = 'error';
+    lastError = 'Mikrofona erişilemedi. Tarayıcı izinlerini kontrol et.';
+    drawFooter();
+    drawMessages();
+    return;
+  }
+  const s = state.settings;
+  const model = s.modelSize === 'large' ? s.models.realtimeLarge : s.models.realtimeMini;
+  const resuming = lesson.messages.length > 0;
+  const myLesson = lesson;
+  try {
+    const conn = await connectRealtime({
+      apiKey: s.apiKey,
+      model,
+      instructions: await teacherSystem(true),
+      voice: s.voice,
+      speed: realtimeSpeed(s, state.profile.level),
+      transcribeModel: s.models.transcribe,
+      stream,
+      handlers: liveHandlers({ resuming }),
+    });
+    if (!ctx || mode !== 'live' || liveStatus !== 'connecting' || myLesson !== lesson) { conn.close(); return; }
+    rt = conn;
+    if (pendingOpen) { const f = pendingOpen; pendingOpen = null; f(); }
+  } catch (err) {
+    stopStream();
+    rt = null;
+    if (myLesson !== lesson) return;
+    liveStatus = 'error';
+    lastError = err.message;
+    drawFooter();
+    drawMessages();
+  }
+}
+
+let pendingOpen = null;
+let lastWarnAt = 0;
+
+function liveHandlers({ resuming }) {
+  const myLesson = lesson;
+  const alive = () => ctx && lesson && lesson === myLesson && mode === 'live';
+  return {
+    onOpen() {
+      const start = () => {
+        if (!alive()) return;
+        liveStatus = 'live';
+        drawFooter();
+        drawMessages();
+        if (!resuming) rt.respond();
+        else rt.respond('The student has just come back after a pause. Say "Welcome back!" in a few words and continue the conversation with a question related to where you left off.');
+      };
+      if (rt) start(); else pendingOpen = start;
+    },
+    onListening(b) { if (!alive()) return; listening = b; drawFooter(); },
+    onSpeaking(b) { if (!alive()) return; speaking = b; drawFooter(); },
+    onUserItem(itemId) {
+      if (!alive() || lesson.messages.some((m) => m.itemId === itemId)) return;
+      lesson.messages.push({ id: Date.now(), itemId, role: 'student', text: '', pending: true });
+      scheduleDraw();
+    },
+    async onUserTranscript(itemId, text) {
+      if (!alive()) return;
+      let msg = lesson.messages.find((m) => m.itemId === itemId);
+      if (!text) {
+        if (msg) lesson.messages.splice(lesson.messages.indexOf(msg), 1);
+        scheduleDraw();
+        return;
+      }
+      if (!msg) {
+        msg = { id: Date.now(), itemId, role: 'student', text };
+        lesson.messages.push(msg);
+      }
+      msg.text = text;
+      delete msg.pending;
+      const idx = lesson.messages.indexOf(msg);
+      const prevTeacher = lesson.messages.slice(0, idx).reverse().find((m) => m.role === 'teacher')?.text;
+      await countSentence();
+      runAnalysis(msg, prevTeacher);
+      await saveLesson();
+      scheduleDraw();
+    },
+    onAssistantDelta(rid, delta) {
+      if (!alive()) return;
+      let msg = lesson.messages.find((m) => m.respId === rid);
+      if (!msg) {
+        msg = { id: Date.now() + Math.random(), respId: rid, role: 'teacher', text: '' };
+        lesson.messages.push(msg);
+      }
+      msg.text += delta;
+      scheduleDraw();
+    },
+    async onAssistantDone(rid, text) {
+      if (!alive()) return;
+      let msg = lesson.messages.find((m) => m.respId === rid);
+      if (!msg) {
+        msg = { id: Date.now() + Math.random(), respId: rid, role: 'teacher', text: '' };
+        lesson.messages.push(msg);
+      }
+      if (text) msg.text = text;
+      if (noticeSent && ctx.state.profile.levelNotice === noticeSent) {
+        delete ctx.state.profile.levelNotice;
+        noticeSent = null;
+        await saveProfile(ctx.state.profile);
+      }
+      await saveLesson();
+      scheduleDraw();
+    },
+    onUsage(usd) { addLessonCost(usd); },
+    onWarn(m) {
+      if (!alive()) return;
+      const now = Date.now();
+      if (now - lastWarnAt > 8000) { lastWarnAt = now; ctx.toast('Uyarı: ' + String(m).slice(0, 120)); }
+    },
+    onError(m) {
+      if (!alive()) return;
+      lastError = m;
+      pauseLive('error');
+    },
+  };
+}
+
+function closeLive() {
+  if (rt) { rt.close(); rt = null; }
+  pendingOpen = null;
+  speaking = false;
+  listening = false;
+}
+
+function pauseLive(st = 'paused') {
+  closeLive();
+  stopStream();
+  liveStatus = st;
+  lesson.messages = lesson.messages.filter((m) => !m.pending);
+  saveLesson();
+  drawFooter();
+  drawMessages();
+}
+
+// ======================================================================
+// Ortak: analiz, kelimeler, kayıt
+// ======================================================================
+async function countSentence() {
+  ctx.state.profile.sentenceCount = (ctx.state.profile.sentenceCount || 0) + 1;
+  await saveProfile(ctx.state.profile);
+}
+
+function runAnalysis(msg, prevTeacher) {
+  if (!ctx.state.settings.apiKey) return;
+  const lessonRef = lesson;
+  analyzeSentence(ctx.state, { text: msg.text, prevTeacher, lessonId: lesson.id, targets: allTargets() }, (r) => onAnalysis(lessonRef, msg.id, r));
+}
+
+function applyWords(okList, badList, ref = lesson) {
+  const targets = new Set([...ctx.state.study.words, ...(ref.reviewWords || [])].map((w) => w.toLowerCase()));
+  const okW = [];
+  const badW = [];
+  okList.forEach((w) => {
+    const k = String(w).toLowerCase();
+    if (targets.has(k)) { ref.wordStatus[k] = 'ok'; okW.push(k); }
+  });
+  badList.forEach((w) => {
+    const k = String(w).toLowerCase();
+    if (targets.has(k)) { badW.push(k); if (ref.wordStatus[k] !== 'ok') ref.wordStatus[k] = 'bad'; }
+  });
+  recordWordUse(okW, badW);
+}
+
+async function onAnalysis(lessonRef, msgId, r) {
+  if (!r) return;
+  // Ders bu arada bittiyse, sonuçları arşivdeki derse yaz
+  const target = lessonRef;
+  const msg = target.messages.find((m) => m.id === msgId);
+  const liveLesson = mode === 'live' || target.mode === 'live';
+  if (msg) {
+    msg.scores = r.scores;
+    if (liveLesson && r.mistake && !msg.correction) {
+      msg.correction = { original: r.mistake.original, corrected: r.mistake.corrected, note_tr: r.mistake.rule_tr, important: true };
+    }
+  }
+  if (liveLesson) applyWords(r.wordsOk, r.wordsBad, target);
+  target.mistakesAdded = [...(target.mistakesAdded || []), ...r.added.map((m) => m.id)];
+  target.mistakesLearned = [...(target.mistakesLearned || []), ...r.learned.map((m) => m.id)];
+
+  if (target !== lesson) {
+    // Arşivlenmiş dersi güncelle
+    const archive = (await db.get('lessons')) || [];
+    const i = archive.findIndex((l) => l.id === target.id);
+    if (i >= 0) {
+      archive[i] = { ...archive[i], messages: target.messages, wordStatus: target.wordStatus, mistakesAdded: target.mistakesAdded, mistakesLearned: target.mistakesLearned };
+      await db.set('lessons', archive);
+    }
+    return;
+  }
   await saveLesson();
+  if (!ctx || !ctx.app.querySelector('#msgs')) return;
+  drawMessages();
+  drawChips();
+
   if (r.levelChange) {
-    const up = LEVELS_ORDER.indexOf(r.levelChange.to) > LEVELS_ORDER.indexOf(r.levelChange.from);
+    const up = LEVELS.indexOf(r.levelChange.to) > LEVELS.indexOf(r.levelChange.from);
     ctx.toast((up ? 'Seviye atladın: ' : 'Seviye ayarlandı: ') + r.levelChange.from + ' → ' + r.levelChange.to);
     const pill = ctx.app.querySelector('.lvl-pill');
     if (pill) pill.textContent = r.levelChange.to;
+    if (mode === 'live' && rt) {
+      noticeSent = ctx.state.profile.levelNotice;
+      rt.updateInstructions(await teacherSystem(true));
+    }
   } else if (r.learned.length) {
     ctx.toast('Öğrenildi: ' + r.learned[0].corrected);
   }
 }
 
-// ---------- Kayıt ----------
 async function saveLesson() {
-  await db.set('lesson', lesson);
+  if (lesson) {
+    lesson.mode = mode;
+    await db.set('lesson', lesson);
+  }
 }
 
 async function addLessonCost(usd) {
-  if (!usd) return;
+  if (!usd || !lesson) return;
   lesson.cost = (lesson.cost || 0) + usd;
   await addCost(usd);
   await saveLesson();
 }
 
-async function startNewLesson() {
+// Dersi arşivle (özet ekranı ve İlerleme için)
+export async function archiveLesson(l, levelEnd) {
+  const archive = (await db.get('lessons')) || [];
+  l.messages = l.messages.filter((m) => !m.pending);
+  l.endedAt = new Date().toISOString();
+  l.levelEnd = levelEnd;
+  archive.unshift(l);
+  await db.set('lessons', archive.slice(0, 40));
+  await db.del('lesson');
+  return l;
+}
+
+async function endLesson() {
   if (status === 'thinking' || status === 'transcribing') return;
-  if (lesson.messages.length && !confirm('Bu ders bitsin ve yeni ders başlasın mı?')) return;
-  stopAudio();
-  if (lesson.messages.length) {
-    const archive = (await db.get('lessons')) || [];
-    archive.unshift({ ...lesson, endedAt: new Date().toISOString() });
-    await db.set('lessons', archive.slice(0, 30));
+  const hasStudent = lesson.messages.some((m) => m.role === 'student' && !m.pending);
+  if (!hasStudent) {
+    if (!confirm('Bu derste henüz konuşmadın. Ders sıfırlanıp yeniden başlasın mı?')) return;
+    leaveLesson();
+    await db.del('lesson');
+    renderLesson(ctx);
+    return;
   }
+  if (!confirm('Dersi bitirip özetini görmek ister misin?')) return;
+  leaveLesson();
   audioUrls.forEach((u) => URL.revokeObjectURL(u));
   audioUrls.clear();
-  lesson = await prepareLesson(newLesson());
-  pending = null;
-  lastError = null;
-  await saveLesson();
-  draw();
-  teacherTurn();
+  const done = await archiveLesson(lesson, ctx.state.profile.level);
+  lesson = null;
+  location.hash = '#summary/' + done.id;
 }
 
 // Ayarlardaki "Sesi dinle" düğmesi için
@@ -450,4 +752,3 @@ export async function previewVoice(settings, level) {
   await a.play();
   await addCost(ttsCost(4));
 }
-

@@ -1,6 +1,6 @@
 // Uygulama kabuğunu önbelleğe alır; uygulama hızlı açılır.
 // API çağrıları önbelleğe alınmaz.
-const CACHE = 'ingilizce-v3';
+const CACHE = 'ingilizce-v4';
 const SHELL = [
   './',
   './index.html',
@@ -12,6 +12,9 @@ const SHELL = [
   './js/lesson.js',
   './js/teacher.js',
   './js/analysis.js',
+  './js/realtime.js',
+  './js/summary.js',
+  './js/progress.js',
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png',

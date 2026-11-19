@@ -33,12 +33,27 @@ export function ttsInstructions(settings, level) {
     ' Use clear standard pronunciation. When quoting the student\'s sentence or the corrected sentence, say it a little more slowly.';
 }
 
+// Canlı Sohbet ses hızı (0.25-1.5)
+export function realtimeSpeed(settings, level) {
+  return { slow: 0.8, normal: 1, fast: 1.1 }[speedOf(settings, level)];
+}
+
+// Canlı Sohbet için konuşma tarzı ek talimatı
+export function liveSpeechStyle(settings, level) {
+  return {
+    slow: 'SPEECH SPEED: speak VERY slowly and clearly, word by word, with short pauses between words.',
+    normal: 'SPEECH SPEED: speak at a normal, natural pace, clearly.',
+    fast: 'SPEECH SPEED: speak at a natural, fairly fast conversational pace.',
+  }[speedOf(settings, level)];
+}
+
 // Telefonda çalma hızı (ses tonu korunur)
 export function playbackRate(settings, level) {
   return { slow: 0.85, normal: 1, fast: 1.08 }[speedOf(settings, level)];
 }
 
 export function buildTeacherSystem({ settings, profile, study }, extras = {}) {
+  const live = !!extras.live; // Canlı Sohbet: JSON yok, doğrudan konuşma
   const focus = extras.focus || [];
   const review = extras.review || [];
   const topics = study.topics.map(topicById).filter(Boolean).map((t) => `${t.title} (${t.level})`);
@@ -74,10 +89,13 @@ CORRECTIONS
 - Spoken correction, at the start of "reply": You said: "...". In English we say: "...". + one very simple reason + Another example: "...". Then continue the conversation naturally.
 - If the sentence is correct, never invent a mistake. Sometimes praise briefly and naturally.
 
-OUTPUT: return ONLY a JSON object:
+${live ? `VOICE CONVERSATION
+- This is a live spoken conversation. Speak naturally; never read out lists, markdown or JSON.
+- Wait for the student to finish; they are a learner and may pause to think.
+- At the very start of the lesson: greet briefly, introduce the focus, and ask the first question.` : `OUTPUT: return ONLY a JSON object:
 {"reply": "exactly what you say aloud",
  "correction": null or {"original": "the student's sentence", "corrected": "natural correct version of the whole sentence", "note_tr": "very short Turkish explanation, max 10 words", "important": true or false},
  "words_used_ok": ["target words used correctly in the student's LAST turn"],
  "words_used_wrong": ["target words used wrongly in the student's LAST turn"]}
-When the user message is [START_LESSON]: greet briefly, introduce the focus, ask the first question; "correction" is null.`;
+When the user message is [START_LESSON]: greet briefly, introduce the focus, ask the first question; "correction" is null.`}`;
 }

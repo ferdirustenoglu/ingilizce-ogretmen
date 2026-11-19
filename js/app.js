@@ -4,7 +4,9 @@ import {
   loadSavedStudies, saveSavedStudies, exportAll, importAll, db, loadCosts, today,
 } from './db.js';
 import { testApiKey } from './openai.js';
-import { renderLesson, leaveLesson, previewVoice } from './lesson.js';
+import { renderLesson, leaveLesson, previewVoice, archiveLesson } from './lesson.js';
+import { renderSummary } from './summary.js';
+import { renderProgress } from './progress.js';
 import { levelProgress } from './analysis.js';
 
 // ---------- Uygulama durumu ----------
@@ -58,11 +60,19 @@ const ICON = {
 };
 
 // ---------- Yönlendirme ----------
-const ROUTES = { home: renderHome, study: renderStudy, progress: renderProgress, settings: renderSettings, lesson: () => renderLesson({ app, state, esc, toast, ICON }) };
+const C = () => ({ app, state, esc, toast, ICON });
+const ROUTES = {
+  home: renderHome,
+  study: renderStudy,
+  progress: (sub) => renderProgress(C(), sub),
+  settings: renderSettings,
+  lesson: () => renderLesson(C()),
+  summary: (sub) => renderSummary(C(), sub),
+};
 let currentRoute = null;
 
 function route() {
-  const name = (location.hash || '#home').slice(1);
+  const [name, sub] = (location.hash || '#home').slice(1).split('/');
   const render = ROUTES[name] || renderHome;
   if (currentRoute === 'lesson' && name !== 'lesson') leaveLesson();
   currentRoute = name;
@@ -71,7 +81,7 @@ function route() {
     else a.removeAttribute('aria-current');
   });
   document.querySelector('.nav').style.display = name === 'lesson' ? 'none' : '';
-  render();
+  render(sub);
   window.scrollTo(0, 0);
 }
 
@@ -133,23 +143,13 @@ async function renderHome() {
   app.querySelector('#homeNew')?.addEventListener('click', async () => {
     if (!confirm('Mevcut ders bitsin ve yeni ders başlasın mı?')) return;
     const l = await db.get('lesson');
-    const archive = (await db.get('lessons')) || [];
-    archive.unshift({ ...l, endedAt: new Date().toISOString() });
-    await db.set('lessons', archive.slice(0, 30));
-    await db.del('lesson');
+    if (l && l.messages.some((m) => m.role === 'student')) await archiveLesson(l, state.profile.level);
+    else await db.del('lesson');
     location.hash = '#lesson';
   });
 }
 
 
-// ---------- İlerleme (Aşama 5'te gelecek) ----------
-function renderProgress() {
-  app.innerHTML = `
-  <div class="page">
-    <h1>İlerleme</h1>
-    <div class="note">Seviye geçmişi, Hata Bankası, kelime arşivi ve geçmiş dersler, ders ve analiz aşamaları tamamlandıktan sonra burada görünecek.</div>
-  </div>`;
-}
 
 // ---------- Çalışma ----------
 function renderStudy() {
@@ -199,7 +199,7 @@ function renderStudy() {
       <div id="savedList" style="display:flex; flex-direction:column"></div>
     </section>
 
-    <a class="btn btn-primary btn-big" href="#lesson">Bu Çalışmayla Başla</a>
+    <button type="button" class="btn btn-primary btn-big" id="startStudy">Bu Çalışmayla Başla</button>
   </div>`;
 
   renderTopicList();
@@ -232,6 +232,19 @@ function renderStudy() {
     app.querySelector('#wordCount').textContent = parseWords(e.target.value).length + ' kelime';
     saveWords(e.target.value);
   });
+  app.querySelector('#startStudy').addEventListener('click', async () => {
+    state.study.words = parseWords(app.querySelector('#words').value);
+    await saveStudy(state.study);
+    const l = await db.get('lesson');
+    if (l && l.messages.some((m) => m.role === 'student')) {
+      if (!confirm('Devam eden bir ders var. O ders bitsin ve bu çalışmayla yeni ders başlasın mı?')) return;
+      await archiveLesson(l, state.profile.level);
+    } else if (l) {
+      await db.del('lesson');
+    }
+    location.hash = '#lesson';
+  });
+
   app.querySelector('#saveStudy').addEventListener('click', async () => {
     const input = app.querySelector('#studyName');
     const name = input.value.trim();
@@ -482,7 +495,7 @@ function renderSettings() {
       <button type="button" class="btn btn-danger" id="resetAll">Tüm verileri sıfırla</button>
     </section>
 
-    <p class="small" style="text-align:center">İngilizce Öğretmen · Aşama 3</p>
+    <p class="small" style="text-align:center">İngilizce Öğretmen · v1.0</p>
   </div>`;
 
   const persist = () => saveSettings(state.settings);
