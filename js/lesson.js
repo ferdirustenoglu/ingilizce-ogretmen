@@ -4,7 +4,9 @@
 
 import { db, saveProfile, addCost } from './db.js';
 import { topicById, LEVELS } from './topics.js';
-import { chatJSON, transcribe, speak, transcribeCost, ttsCost } from './openai.js';
+import { chatJSON, transcribeDetailed, uncertainWords, transcribeModel, speak, transcribeCost, ttsCost } from './openai.js';
+import { addPronWords } from './pron.js';
+import { playText, holdToRecord, stopPlayback } from './audio.js';
 import { buildTeacherSystem, ttsInstructions, playbackRate, realtimeSpeed, liveSpeechStyle } from './teacher.js';
 import {
   analyzeSentence, pickFocusMistakes, pickReviewWords, registerWords, recordWordUse, loadMistakes,
@@ -83,6 +85,7 @@ export async function renderLesson(c) {
 
 export function leaveLesson() {
   stopAudio();
+  howSayState = null;
   if (recorder && recorder.state !== 'inactive') recorder.stop();
   recording = false;
   closeLive();
@@ -116,7 +119,11 @@ function draw() {
     <div class="msgs" id="msgs"></div>
     <section class="chips" id="chips" aria-label="Günün kelimeleri"></section>
     <div id="preview"></div>
+    <div class="helpers"><button type="button" class="help-btn" id="howSay">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 8l6 6M4 14l6-6 2-3M2 5h12M7 2h1M22 22l-5-10-5 10M14 18h6"/></svg>
+      Nasıl denir?</button><span class="small">Öğretmenin cümlesine dokun: Türkçesi çıkar</span></div>
     <footer class="lesson-foot" id="foot"></footer>
+    <div id="sheet"></div>
   </div>`;
 
   drawMessages();
@@ -124,6 +131,7 @@ function draw() {
   drawPreview();
   drawFooter();
   app.querySelector('#endLesson').addEventListener('click', endLesson);
+  app.querySelector('#howSay').addEventListener('click', openHowSay);
 }
 
 function scheduleDraw() {
@@ -143,7 +151,8 @@ function drawMessages() {
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg>
           </button>`
         : '';
-      return `<div class="bubble bubble-t"><span>${esc(m.text) || '…'}</span>${replayBtn}</div>`;
+      const tr = m.tr && !m.trHidden ? `<span class="tr-line">${esc(m.tr)}</span>` : (m.trLoading ? '<span class="tr-line">Çevriliyor…</span>' : '');
+      return `<div class="bubble bubble-t"><span class="t-text" data-tr="${m.id}" role="button" tabindex="0" aria-label="Türkçesini göster">${esc(m.text) || '…'}${tr}</span>${replayBtn}</div>`;
     }
     if (m.pending) return '<div class="bubble bubble-s typing" aria-label="Söylediğin yazıya çevriliyor"><span></span><span></span><span></span></div>';
     const c = m.correction;
@@ -171,6 +180,7 @@ function drawMessages() {
 
   box.innerHTML = html + thinking + err + connecting;
   box.querySelectorAll('[data-replay]').forEach((b) => b.addEventListener('click', () => replay(+b.dataset.replay)));
+  box.querySelectorAll('[data-tr]').forEach((el) => el.addEventListener('click', () => toggleTranslate(+el.dataset.tr)));
   box.querySelector('#retry')?.addEventListener('click', () => {
     lastError = null;
     if (mode === 'live') connectLive(); else teacherTurn();
@@ -203,7 +213,10 @@ function drawPreview() {
   box.innerHTML = `
     <section class="preview" aria-label="Gönderilmeden önce önizleme">
       <p class="small" style="color:var(--accent-text); font-weight:700">Anladığım cümle — doğru mu?</p>
-      <p style="font-size:16px; line-height:1.45">${ctx.esc(pending.text)}</p>
+      <p style="font-size:16px; line-height:1.45">${previewText(pending)}</p>
+      ${pending.unsure && pending.unsure.length ? `<p class="unsure-note">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.5v.5"/></svg>
+        <span>Altı çizili kelimeleri net anlayamadım. Telaffuz Çalışması listene ekledim.</span></p>` : ''}
       <div class="row">
         <button type="button" class="btn btn-small" style="flex:1" id="cancelSend">İptal, tekrar söyle</button>
         <button type="button" class="btn btn-small btn-send" style="flex:1" id="send">Gönder</button>
@@ -211,6 +224,20 @@ function drawPreview() {
     </section>`;
   box.querySelector('#cancelSend').addEventListener('click', () => { pending = null; setStatus('idle'); });
   box.querySelector('#send').addEventListener('click', sendPending);
+}
+
+// Önizleme metni: emin olunamayan kelimelerin altı çizili
+function previewText(p) {
+  const esc = ctx.esc;
+  if (!p.words || !p.unsure || !p.unsure.length) return esc(p.text);
+  const full = p.words.full;
+  let out = '';
+  let i = 0;
+  p.unsure.forEach((u) => {
+    out += esc(full.slice(i, u.start)) + `<mark class="unsure">${esc(full.slice(u.start, u.end))}</mark>`;
+    i = u.end;
+  });
+  return (out + esc(full.slice(i))).trim();
 }
 
 function drawFooter() {
@@ -285,6 +312,140 @@ function setStatus(s) {
 }
 
 // ======================================================================
+// Yardımlar: öğretmen cümlesi çevirisi ve "Nasıl denir?"
+// ======================================================================
+async function toggleTranslate(id) {
+  const m = lesson.messages.find((x) => x.id === id);
+  if (!m || !m.text || m.trLoading) return;
+  // Çeviri varsa sadece göster/gizle (tekrar ücret yok)
+  if (m.tr) { m.trHidden = !m.trHidden; drawMessages(); saveLesson(); return; }
+  if (!ctx.state.settings.apiKey) return;
+  m.trLoading = true;
+  drawMessages();
+  try {
+    const r = await chatJSON(ctx.state.settings, [
+      { role: 'system', content: 'Translate the English text into natural, simple Turkish. Return ONLY JSON: {"tr": "..."}' },
+      { role: 'user', content: m.text },
+    ], 400, ctx.state.settings.models.analysis);
+    await addLessonCost(r.cost);
+    m.tr = String(r.data.tr || '');
+  } catch (e) {
+    ctx.toast(e.message);
+  }
+  delete m.trLoading;
+  await saveLesson();
+  if (ctx.app.querySelector('#msgs')) drawMessages();
+}
+
+let howSayState = null; // { tr, result, busy }
+
+function setLiveMic(enabled) {
+  if (mode === 'live' && stream) stream.getAudioTracks().forEach((t) => { t.enabled = enabled; });
+}
+
+function openHowSay() {
+  howSayState = { tr: '', result: null, busy: '' };
+  setLiveMic(false); // Canlı Sohbet'te öğretmen Türkçe konuşmanı duymasın
+  if (mode === 'ptt' && status === 'speaking') { stopAudio(); setStatus('idle'); }
+  drawSheet();
+}
+
+function closeHowSay() {
+  howSayState = null;
+  stopPlayback();
+  setLiveMic(true);
+  drawSheet();
+}
+
+function drawSheet() {
+  const box = ctx.app.querySelector('#sheet');
+  if (!box) return;
+  if (!howSayState) { box.innerHTML = ''; return; }
+  const { esc } = ctx;
+  const h = howSayState;
+  const r = h.result;
+  box.innerHTML = `
+    <div class="sheet-backdrop" id="sheetClose"></div>
+    <section class="sheet" role="dialog" aria-label="Nasıl denir?">
+      <div class="row-between"><h2>Nasıl denir?</h2><button type="button" class="icon-btn" id="sheetX" aria-label="Kapat">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+      <p class="small">Söylemek istediğini Türkçe yaz ya da söyle; İngilizcesini öğreteyim.</p>
+      <label for="trInput" class="sr-only">Türkçe cümle</label>
+      <textarea id="trInput" class="textarea" rows="2" placeholder="Örn: Dün işten geç çıktım">${esc(h.tr)}</textarea>
+      <div class="row">
+        <button type="button" class="btn btn-small" id="trMic" style="flex:1">${h.busy === 'rec' ? 'Dinliyorum…' : 'Basılı tut, Türkçe söyle'}</button>
+        <button type="button" class="btn btn-small btn-primary" id="trGo" style="flex:1" ${h.busy ? 'disabled' : ''}>${h.busy === 'tr' ? 'Hazırlanıyor…' : 'İngilizcesi'}</button>
+      </div>
+      ${r ? `<div class="how-result">
+        <div class="row" style="align-items:flex-start; gap:8px">
+          <p class="how-en" style="flex:1">${esc(r.en)}</p>
+          <button type="button" class="replay" id="howListen" aria-label="Dinle"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg></button>
+        </div>
+        ${r.alt ? `<p class="small">Başka bir şekilde: <b style="color:var(--text)">${esc(r.alt)}</b></p>` : ''}
+        ${r.note ? `<p class="small" style="color:#E5C88E">${esc(r.note)}</p>` : ''}
+        <button type="button" class="btn btn-send" id="howTry">${mode === 'live' ? 'Kapat ve öğretmene söyle' : 'Kapat ve şimdi söyle'}</button>
+      </div>` : ''}
+    </section>`;
+
+  const input = box.querySelector('#trInput');
+  input.addEventListener('input', () => { h.tr = input.value; });
+  box.querySelector('#sheetClose').addEventListener('click', closeHowSay);
+  box.querySelector('#sheetX').addEventListener('click', closeHowSay);
+  box.querySelector('#trGo').addEventListener('click', () => translateToEnglish());
+  box.querySelector('#howListen')?.addEventListener('click', async () => {
+    try { await playText(ctx.state.settings, ctx.state.profile.level, r.en); } catch (e) { ctx.toast(e.message); }
+  });
+  box.querySelector('#howTry')?.addEventListener('click', closeHowSay);
+  holdToRecord(box.querySelector('#trMic'), {
+    canStart: () => !h.busy && !!ctx.state.settings.apiKey,
+    onStart: () => { h.busy = 'rec'; box.querySelector('#trMic').textContent = 'Dinliyorum… bitince bırak'; },
+    onStop: async (blob, seconds) => {
+      h.busy = 'stt';
+      box.querySelector('#trMic').textContent = 'Yazıya çeviriyorum…';
+      try {
+        const t = await transcribeDetailed(ctx.state.settings, blob, { language: 'tr', logprobs: false });
+        await addLessonCost(transcribeCost(seconds, ctx.state.settings));
+        h.tr = t.text;
+        h.busy = '';
+        if (h.tr) { await translateToEnglish(); return; }
+      } catch (e) { ctx.toast(e.message); }
+      h.busy = '';
+      if (howSayState === h) drawSheet();
+    },
+    onError: (m) => { h.busy = ''; ctx.toast(m); if (howSayState === h) drawSheet(); },
+  });
+}
+
+async function translateToEnglish() {
+  const h = howSayState;
+  if (!h) return;
+  const text = (h.tr || '').trim();
+  if (!text) { ctx.toast('Önce Türkçe bir cümle yaz ya da söyle.'); return; }
+  if (!ctx.state.settings.apiKey) { ctx.toast('Önce Ayarlar’dan API anahtarını gir.'); return; }
+  h.busy = 'tr';
+  drawSheet();
+  try {
+    const lastTeacher = [...lesson.messages].reverse().find((m) => m.role === 'teacher')?.text || '';
+    const r = await chatJSON(ctx.state.settings, [
+      { role: 'system', content: `You help an adult Turkish learner (English level ${ctx.state.profile.level}) say something in English during a conversation lesson. Give the most natural spoken English for the Turkish text, using vocabulary suitable for the level. Return ONLY JSON: {"en": "natural English sentence", "alt": "another common way to say it (optional, may be empty)", "note_tr": "very short Turkish note about a key word or structure (max 15 words)"}` },
+      { role: 'user', content: (lastTeacher ? `Context – the teacher just said: "${lastTeacher}"
+` : '') + `Turkish: ${text}` },
+    ], 500, ctx.state.settings.models.analysis);
+    await addLessonCost(r.cost);
+    h.result = { en: String(r.data.en || ''), alt: String(r.data.alt || ''), note: String(r.data.note_tr || '') };
+  } catch (e) {
+    ctx.toast(e.message);
+  }
+  h.busy = '';
+  if (howSayState === h) {
+    drawSheet();
+    if (h.result && h.result.en) {
+      try { await playText(ctx.state.settings, ctx.state.profile.level, h.result.en); } catch { /* ses olmasa da metin yeterli */ }
+    }
+  }
+}
+
+// ======================================================================
 // Bas-Konuş
 // ======================================================================
 async function openMic() {
@@ -339,14 +500,16 @@ async function onRecordStop() {
   try {
     const targets = allTargets();
     const hint = 'An English learner speaking English.' + (targets.length ? ' Words: ' + targets.join(', ') + '.' : '');
-    const text = await transcribe(settings, blob, hint);
-    await addLessonCost(transcribeCost(seconds));
-    if (!text) {
+    const r = await transcribeDetailed(settings, blob, { hint });
+    await addLessonCost(transcribeCost(seconds, settings));
+    if (!r.text) {
       ctx.toast('Ses anlaşılamadı, tekrar dene.');
       setStatus('idle');
       return;
     }
-    pending = { text };
+    const unsure = uncertainWords(r.words);
+    pending = { text: r.text, words: r.words, unsure };
+    if (unsure.length) addPronWords(unsure.map((u) => u.w));
     setStatus('preview');
   } catch (err) {
     ctx.toast(err.message);
@@ -503,7 +666,7 @@ async function connectLive() {
       instructions: await teacherSystem(true),
       voice: s.voice,
       speed: realtimeSpeed(s, state.profile.level),
-      transcribeModel: s.models.transcribe,
+      transcribeModel: transcribeModel(s),
       stream,
       handlers: liveHandlers({ resuming }),
     });
@@ -701,7 +864,7 @@ async function onAnalysis(lessonRef, msgId, r) {
 async function saveLesson() {
   if (lesson) {
     lesson.mode = mode;
-    await db.set('lesson', lesson);
+    await db.set('lesson', JSON.parse(JSON.stringify(lesson, (k, v) => (k === 'trLoading' ? undefined : v))));
   }
 }
 

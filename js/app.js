@@ -7,6 +7,9 @@ import { testApiKey } from './openai.js';
 import { renderLesson, leaveLesson, previewVoice, archiveLesson } from './lesson.js';
 import { renderSummary } from './summary.js';
 import { renderProgress } from './progress.js';
+import { renderPron, loadPronWords } from './pron.js';
+import { stopPlayback } from './audio.js';
+import { renderWordCards } from './wordcards.js';
 import { levelProgress } from './analysis.js';
 
 // ---------- Uygulama durumu ----------
@@ -68,6 +71,7 @@ const ROUTES = {
   settings: renderSettings,
   lesson: () => renderLesson(C()),
   summary: (sub) => renderSummary(C(), sub),
+  pron: (sub) => renderPron(C(), sub),
 };
 let currentRoute = null;
 
@@ -75,6 +79,7 @@ function route() {
   const [name, sub] = (location.hash || '#home').slice(1).split('/');
   const render = ROUTES[name] || renderHome;
   if (currentRoute === 'lesson' && name !== 'lesson') leaveLesson();
+  if (currentRoute !== name) stopPlayback();
   currentRoute = name;
   document.querySelectorAll('.nav a').forEach((a) => {
     if (a.dataset.tab === name) a.setAttribute('aria-current', 'page');
@@ -93,6 +98,7 @@ async function renderHome() {
   const lessonSaved = await db.get('lesson');
   const hasLesson = lessonSaved && lessonSaved.messages && lessonSaved.messages.length;
   const prog = levelProgress(profile);
+  const hardCount = Object.keys(await loadPronWords()).length;
   const topics = study.topics.map(topicById).filter(Boolean);
   const modeLabel = settings.voiceMode === 'realtime' ? 'Canlı Sohbet' : 'Bas-Konuş';
 
@@ -130,6 +136,17 @@ async function renderHome() {
         : `<p class="muted">Konu seçilmedi. Öğretmen serbest sohbet yapar.</p>`}
       <p class="small">${study.words.length} kelime</p>
     </section>
+
+    <a class="card row" href="#pron" style="flex-direction:row; align-items:center; gap:12px; text-decoration:none; color:var(--text)">
+      <div style="width:40px; height:40px; border-radius:12px; background:var(--surface-2); color:var(--accent-text); display:flex; align-items:center; justify-content:center; flex-shrink:0">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></svg>
+      </div>
+      <div style="flex:1; display:flex; flex-direction:column; gap:2px">
+        <span style="font-size:14px; font-weight:700">Telaffuz Çalışması</span>
+        <span class="small">${hardCount ? hardCount + ' kelimede zorlandın' : 'Zor kelimeleri dinle, söyle, puan al'}</span>
+      </div>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9AA3CF" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+    </a>
 
     <div class="grid-3">
       <div class="stat"><b>${profile.sentenceCount || 0}</b><span>toplam cümle</span></div>
@@ -187,6 +204,8 @@ function renderStudy() {
       </div>
       <p class="small">Her satıra bir kelime yaz.</p>
       <textarea id="words" class="textarea" rows="10" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="go&#10;buy&#10;forget">${esc(state.study.words.join('\n'))}</textarea>
+      <button type="button" class="btn btn-small" id="showCards">Kelime kartlarını göster</button>
+      <div id="wordCards" style="display:flex; flex-direction:column; gap:10px"></div>
     </section>
 
     <section class="card">
@@ -232,6 +251,16 @@ function renderStudy() {
     app.querySelector('#wordCount').textContent = parseWords(e.target.value).length + ' kelime';
     saveWords(e.target.value);
   });
+  app.querySelector('#showCards').addEventListener('click', async (e) => {
+    const words = parseWords(app.querySelector('#words').value);
+    if (!words.length) { toast('Önce kelime yaz.'); return; }
+    state.study.words = words;
+    await saveStudy(state.study);
+    e.target.disabled = true;
+    await renderWordCards({ state, esc, toast }, app.querySelector('#wordCards'), words);
+    e.target.disabled = false;
+  });
+
   app.querySelector('#startStudy').addEventListener('click', async () => {
     state.study.words = parseWords(app.querySelector('#words').value);
     await saveStudy(state.study);
@@ -436,8 +465,10 @@ function renderSettings() {
             ['realtimeLarge', 'Canlı Sohbet – büyük'],
             ['chat', 'Bas-Konuş öğretmen modeli'],
             ['analysis', 'Analiz modeli'],
-            ['transcribe', 'Sesi yazıya çevirme'],
+            ['transcribe', 'Sesi yazıya çevirme – standart'],
+            ['transcribeHigh', 'Sesi yazıya çevirme – yüksek'],
             ['tts', 'Seslendirme'],
+            ['audio', 'Telaffuz değerlendirme / yedek seslendirme'],
           ].map(([k, label]) => `
             <label style="display:flex; flex-direction:column; gap:4px">
               <span class="small" style="font-weight:600">${label}</span>
@@ -446,6 +477,12 @@ function renderSettings() {
           <button type="button" class="link-btn" id="resetModels">Varsayılan model adlarına dön</button>
         </div>
       </details>
+    </section>
+
+    <section class="card">
+      <h2>Ses tanıma kalitesi</h2>
+      ${seg('transcribeQuality', s.transcribeQuality, [['high', 'Yüksek'], ['standard', 'Standart']])}
+      <p class="small">Yüksek: aksanlı konuşmayı daha iyi anlar (dakikası ~0,006$). Standart: daha ucuz (dakikası ~0,003$). 10 dakikalık derste fark yaklaşık 3 kuruş.</p>
     </section>
 
     <section class="card">

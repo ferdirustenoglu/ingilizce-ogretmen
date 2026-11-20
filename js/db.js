@@ -45,8 +45,11 @@ export const DEFAULT_SETTINGS = {
     chat: 'gpt-5-mini',
     analysis: 'gpt-5-mini',
     transcribe: 'gpt-4o-mini-transcribe',
+    transcribeHigh: 'gpt-4o-transcribe',
     tts: 'gpt-4o-mini-tts',
+    audio: 'gpt-audio-1.5',
   },
+  transcribeQuality: 'high', // 'high' | 'standard'
   voice: 'marin',
   speed: 'auto', // 'auto' | 'slow' | 'normal' | 'fast'
   correction: 'all', // 'all' | 'important'
