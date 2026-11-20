@@ -152,7 +152,8 @@ function drawMessages() {
           </button>`
         : '';
       const tr = m.tr && !m.trHidden ? `<span class="tr-line">${esc(m.tr)}</span>` : (m.trLoading ? '<span class="tr-line">Çevriliyor…</span>' : '');
-      return `<div class="bubble bubble-t"><span class="t-text" data-tr="${m.id}" role="button" tabindex="0" aria-label="Türkçesini göster">${esc(m.text) || '…'}${tr}</span>${replayBtn}</div>`;
+      const body = (m.say ? `<span class="t-corr">${fmtTeacher(m.say)}</span>` : '') + `<span class="t-main">${fmtTeacher(m.text) || '…'}</span>`;
+      return `<div class="bubble bubble-t"><span class="t-text" data-tr="${m.id}" role="button" tabindex="0" aria-label="Türkçesini göster">${body}${tr}</span>${replayBtn}</div>`;
     }
     if (m.pending) return '<div class="bubble bubble-s typing" aria-label="Söylediğin yazıya çevriliyor"><span></span><span></span><span></span></div>';
     const c = m.correction;
@@ -224,6 +225,14 @@ function drawPreview() {
     </section>`;
   box.querySelector('#cancelSend').addEventListener('click', () => { pending = null; setStatus('idle'); });
   box.querySelector('#send').addEventListener('click', sendPending);
+}
+
+// Öğretmen metni: tırnak içindeki İngilizce turuncu, paragraflar ayrı
+function fmtTeacher(text) {
+  if (!text) return '';
+  const esc = ctx.esc(text);
+  const quoted = esc.replace(/(&quot;|“|”|«)([^"“”«»]{1,160}?)(&quot;|”|“|»)/g, '<span class="q">$2</span>');
+  return quoted.split(/\n\s*\n|\n/).map((p) => p.trim()).filter(Boolean).map((p) => `<span class="para">${p}</span>`).join('');
 }
 
 // Önizleme metni: emin olunamayan kelimelerin altı çizili
@@ -325,7 +334,7 @@ async function toggleTranslate(id) {
   try {
     const r = await chatJSON(ctx.state.settings, [
       { role: 'system', content: 'Translate the English text into natural, simple Turkish. Return ONLY JSON: {"tr": "..."}' },
-      { role: 'user', content: m.text },
+      { role: 'user', content: m.say ? m.say + '\n\n' + m.text : m.text },
     ], 400, ctx.state.settings.models.analysis);
     await addLessonCost(r.cost);
     m.tr = String(r.data.tr || '');
@@ -372,10 +381,11 @@ function drawSheet() {
       <p class="small">Söylemek istediğini Türkçe yaz ya da söyle; İngilizcesini öğreteyim.</p>
       <label for="trInput" class="sr-only">Türkçe cümle</label>
       <textarea id="trInput" class="textarea" rows="2" placeholder="Örn: Dün işten geç çıktım">${esc(h.tr)}</textarea>
-      <div class="row">
-        <button type="button" class="btn btn-small" id="trMic" style="flex:1">${h.busy === 'rec' ? 'Dinliyorum…' : 'Basılı tut, Türkçe söyle'}</button>
-        <button type="button" class="btn btn-small btn-primary" id="trGo" style="flex:1" ${h.busy ? 'disabled' : ''}>${h.busy === 'tr' ? 'Hazırlanıyor…' : 'İngilizcesi'}</button>
-      </div>
+      <button type="button" class="btn hold-btn" id="trMic">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+        <span>${h.busy === 'stt' ? 'Yazıya çeviriyorum…' : 'Basılı tut, Türkçe söyle'}</span>
+      </button>
+      <button type="button" class="btn btn-small btn-primary" id="trGo" ${h.busy ? 'disabled' : ''}>${h.busy === 'tr' ? 'Hazırlanıyor…' : 'Yazdığımın İngilizcesi'}</button>
       ${r ? `<div class="how-result">
         <div class="row" style="align-items:flex-start; gap:8px">
           <p class="how-en" style="flex:1">${esc(r.en)}</p>
@@ -398,10 +408,17 @@ function drawSheet() {
   box.querySelector('#howTry')?.addEventListener('click', closeHowSay);
   holdToRecord(box.querySelector('#trMic'), {
     canStart: () => !h.busy && !!ctx.state.settings.apiKey,
-    onStart: () => { h.busy = 'rec'; box.querySelector('#trMic').textContent = 'Dinliyorum… bitince bırak'; },
+    onStart: () => {
+      h.busy = 'rec';
+      const b = box.querySelector('#trMic');
+      b.classList.add('rec');
+      b.querySelector('span').textContent = 'Dinliyorum… bitince bırak';
+    },
     onStop: async (blob, seconds) => {
       h.busy = 'stt';
-      box.querySelector('#trMic').textContent = 'Yazıya çeviriyorum…';
+      const b = box.querySelector('#trMic');
+      b.classList.remove('rec');
+      b.querySelector('span').textContent = 'Yazıya çeviriyorum…';
       try {
         const t = await transcribeDetailed(ctx.state.settings, blob, { language: 'tr', logprobs: false });
         await addLessonCost(transcribeCost(seconds, ctx.state.settings));
@@ -538,7 +555,7 @@ async function teacherSystem(live) {
     sys += '\n\n' + liveSpeechStyle(state.settings, state.profile.level);
     if (lesson.messages.length) {
       const recent = lesson.messages.filter((m) => m.text && !m.pending).slice(-12)
-        .map((m) => (m.role === 'teacher' ? 'Teacher: ' : 'Student: ') + m.text).join('\n');
+        .map((m) => (m.role === 'teacher' ? 'Teacher: ' + (m.say ? m.say + ' ' : '') : 'Student: ') + m.text).join('\n');
       sys += `\n\nCONVERSATION SO FAR (the lesson was paused; continue from here, do not start a new lesson):\n${recent}`;
     }
   }
@@ -558,7 +575,7 @@ async function teacherTurn() {
 
   const history = lesson.messages.slice(-HISTORY_LIMIT).map((m) => ({
     role: m.role === 'teacher' ? 'assistant' : 'user',
-    content: m.text,
+    content: m.role === 'teacher' && m.say ? m.say + '\n\n' + m.text : m.text,
   }));
   if (!lesson.messages.length) history.push({ role: 'user', content: '[START_LESSON]' });
   const notice = state.profile.levelNotice;
@@ -578,6 +595,9 @@ async function teacherTurn() {
   if (!ctx || mode !== 'ptt' || myLesson !== lesson) return;
 
   const reply = String(data.reply || '').trim() || 'Sorry, could you say that again?';
+  let corrSay = String(data.correction_say || '').trim();
+  // Düzeltme ayarı "önemliler" ise küçük hatalar sesli söylenmez
+  if (corrSay && state.settings.correction === 'important' && data.correction && data.correction.important === false) corrSay = '';
   const last = lesson.messages[lesson.messages.length - 1];
   if (last && last.role === 'student' && data.correction && data.correction.corrected) {
     last.correction = data.correction;
@@ -589,6 +609,7 @@ async function teacherTurn() {
   applyWords(data.words_used_ok || [], data.words_used_wrong || []);
 
   const tmsg = { id: Date.now(), role: 'teacher', text: reply };
+  if (corrSay) tmsg.say = corrSay;
   lesson.messages.push(tmsg);
   await saveLesson();
   if (!ctx.app.querySelector('#msgs')) return; // kullanıcı ekrandan çıktı
@@ -604,7 +625,8 @@ async function say(msg) {
   try {
     let url = audioUrls.get(msg.id);
     if (!url) {
-      const blob = await speak(state.settings, msg.text, ttsInstructions(state.settings, state.profile.level));
+      const spoken = msg.say ? msg.say + ' ... ' + msg.text : msg.text;
+      const blob = await speak(state.settings, spoken, ttsInstructions(state.settings, state.profile.level));
       url = URL.createObjectURL(blob);
       audioUrls.set(msg.id, url);
       const probe = new Audio(url);

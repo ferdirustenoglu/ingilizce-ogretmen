@@ -398,3 +398,21 @@ mark.unsure { background: transparent; color: var(--amber); text-decoration: und
 .wc-word { font-size: 19px; font-weight: 800; }
 .wc-tr { font-size: 15px; color: var(--soft); }
 .wcard .ml-ex { background: var(--surface); }
+
+/* Öğretmen metni: düzeltme bloğu, paragraflar, turuncu alıntılar */
+.t-text .para { display: block; }
+.t-text .para + .para { margin-top: 8px; }
+.t-corr {
+  display: block; margin-bottom: 10px; padding: 10px 12px;
+  background: #2B2414; border-left: 0; border-radius: 12px;
+  color: #F3E3C3; line-height: 1.5;
+}
+.t-main { display: block; line-height: 1.55; }
+.q { color: #FFB547; font-weight: 700; }
+
+/* Basılı tutulan düğmeler: telefonda kaydırma sanılıp kesilmesin */
+.hold-btn {
+  touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+  min-height: 64px; font-size: 16px; font-weight: 700;
+}
+.hold-btn.rec { background: var(--green); border-color: var(--green); color: #0B2A1C; }

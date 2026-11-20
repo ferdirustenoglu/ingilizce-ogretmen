@@ -1,6 +1,6 @@
 // Uygulama kabuğunu önbelleğe alır; uygulama hızlı açılır.
 // API çağrıları önbelleğe alınmaz.
-const CACHE = 'ingilizce-v8';
+const CACHE = 'ingilizce-v9';
 const SHELL = [
   './',
   './index.html',
