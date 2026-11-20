@@ -288,3 +288,70 @@ export function levelProgress(profile) {
     text: `Değerlendirme: ${n} / ${RULES.windowSize} cümle` + (avg !== null ? ` · ortalama ${avg}` : ''),
   };
 }
+
+// ---------- Hata için konu anlatımı ----------
+// İlk açılışta üretilir, hatanın kaydına eklenir (bir daha ücret ödenmez)
+export async function explainMistake(settings, mistakeId, level) {
+  const all = await loadMistakes();
+  const m = all.find((x) => x.id === mistakeId);
+  if (!m) throw new Error('Hata kaydı bulunamadı.');
+  const model = settings.models.analysis;
+  const body = {
+    model,
+    messages: [
+      {
+        role: 'system',
+        content: `You are a friendly English grammar teacher for an adult Turkish learner at level ${level}.
+Write a short, clear mini-lesson IN TURKISH about the rule behind the student's mistake. English examples stay in English with Turkish translations.
+Keep it simple for this level; no jargon without explanation.
+Return ONLY JSON:
+{"title": "konu başlığı (Türkçe, kısa)",
+ "explanation": "3-5 cümlelik Türkçe konu anlatımı: kural nedir, ne zaman kullanılır, neden öğrenci yanlış yaptı",
+ "pattern": "kural kalıbı/formül, ör. 'Özne + V2 (go → went)'",
+ "examples": [{"en": "...", "tr": "..."}, {"en": "...", "tr": "..."}, {"en": "...", "tr": "..."}],
+ "wrong_right": [{"wrong": "...", "right": "..."}, {"wrong": "...", "right": "..."}],
+ "tip": "akılda tutmak için kısa Türkçe ipucu",
+ "practice": {"question": "öğrencinin bu kuralı kullanarak cevaplayacağı kısa İngilizce soru", "sample_answer": "örnek doğru cevap"}}`,
+      },
+      {
+        role: 'user',
+        content: `Rule: ${m.key}\nStudent said: "${m.original}"\nCorrect: "${m.corrected}"\nShort note: ${m.rule_tr || '-'}`,
+      },
+    ],
+    response_format: { type: 'json_object' },
+    max_completion_tokens: 1200,
+  };
+  if (model.startsWith('gpt-5')) body.reasoning_effort = 'minimal';
+  const send = () => fetch(BASE + '/chat/completions', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + settings.apiKey, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  let res = await send();
+  if (!res.ok && res.status === 400 && body.reasoning_effort) {
+    delete body.reasoning_effort;
+    res = await send();
+  }
+  if (res.status === 401) throw new Error('API anahtarı geçersiz.');
+  if (res.status === 429) throw new Error('Kota veya kredi sorunu.');
+  if (!res.ok) throw new Error('Anlatım hazırlanamadı (' + res.status + ').');
+  const j = await res.json();
+  await addCost(textCost(model, j.usage));
+  const d = JSON.parse(j.choices?.[0]?.message?.content || '{}');
+  const lesson = {
+    title: String(d.title || ''),
+    explanation: String(d.explanation || ''),
+    pattern: String(d.pattern || ''),
+    examples: (d.examples || []).filter((e) => e && e.en).slice(0, 4).map((e) => ({ en: String(e.en), tr: String(e.tr || '') })),
+    wrongRight: (d.wrong_right || []).filter((e) => e && e.right).slice(0, 3).map((e) => ({ wrong: String(e.wrong || ''), right: String(e.right) })),
+    tip: String(d.tip || ''),
+    practice: d.practice && d.practice.question ? { q: String(d.practice.question), a: String(d.practice.sample_answer || '') } : null,
+    level,
+    at: new Date().toISOString(),
+  };
+  // Güncel listeye yaz (bu arada değişmiş olabilir)
+  const fresh = await loadMistakes();
+  const fm = fresh.find((x) => x.id === mistakeId);
+  if (fm) { fm.lesson = lesson; await saveMistakes(fresh); }
+  return lesson;
+}

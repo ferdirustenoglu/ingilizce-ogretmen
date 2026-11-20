@@ -330,3 +330,27 @@ p { margin: 0; }
 .dots i.on { background: var(--green); border-color: var(--green); }
 .list-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 52px; border-top: 1px solid var(--line); text-decoration: none; color: var(--text); }
 .list-row:first-child { border-top: none; }
+
+/* Hata kartı: konu anlatımı */
+.ml-toggle {
+  display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px;
+  padding: 0 12px; border-radius: 12px; border: 1.5px solid var(--line-strong);
+  background: transparent; color: var(--accent-text); font-size: 14px; font-weight: 600; cursor: pointer;
+}
+.ml-toggle .chev { transition: transform 0.2s; }
+.ml-toggle[aria-expanded='true'] .chev { transform: rotate(90deg); }
+.mlesson { display: flex; flex-direction: column; gap: 12px; padding: 4px 2px 2px; }
+.ml-title { margin: 0; font-size: 16px; font-weight: 800; }
+.ml-text { font-size: 14px; line-height: 1.6; color: var(--soft); }
+.ml-label { display: block; font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--accent-text); margin-bottom: 4px; }
+.ml-pattern { background: var(--bg); border: 1.5px solid #5B68C9; border-radius: 12px; padding: 10px 12px; font-size: 15px; font-weight: 700; }
+.ml-sec { display: flex; flex-direction: column; gap: 6px; }
+.ml-ex { display: flex; align-items: flex-start; gap: 8px; background: var(--bg); border-radius: 12px; padding: 10px 12px; }
+.ml-ex .replay { margin: -4px -6px -4px 0; }
+.ml-en { font-size: 15px; font-weight: 600; line-height: 1.45; }
+.ml-tr { font-size: 13px; color: var(--muted); margin-top: 2px; }
+.ml-wr { font-size: 14px; line-height: 1.5; }
+.ml-wrong { color: #D9BC83; text-decoration: line-through; }
+.ml-right { color: var(--green-text); font-weight: 600; }
+.ml-tip { background: var(--amber-bg); border-radius: 12px; padding: 10px 12px; font-size: 14px; line-height: 1.5; color: #FFE2A8; }
+.ml-ans summary { font-size: 13px; font-weight: 600; color: var(--accent-text); cursor: pointer; min-height: 36px; display: flex; align-items: center; }

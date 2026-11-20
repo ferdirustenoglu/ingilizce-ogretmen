@@ -1,7 +1,42 @@
 // İlerleme ekranı: seviye geçmişi, Hata Bankası, kelime arşivi, geçmiş dersler
 import { db } from './db.js';
 import { LEVELS } from './topics.js';
-import { loadMistakes, saveMistakes, loadWordArchive, mistakeTypeLabel, RULES } from './analysis.js';
+import { loadMistakes, saveMistakes, loadWordArchive, mistakeTypeLabel, RULES, explainMistake } from './analysis.js';
+import { speak } from './openai.js';
+import { ttsInstructions, playbackRate } from './teacher.js';
+
+const openLessons = new Set();
+const loadingLessons = new Set();
+let player = null;
+
+const SPK = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg>';
+
+function lessonHtml(m, esc) {
+  const L = m.lesson;
+  if (!L) {
+    return loadingLessons.has(m.id)
+      ? '<p class="small">Konu anlatımı hazırlanıyor…</p>'
+      : '<p class="small">Konu anlatımı henüz hazırlanmadı.</p>';
+  }
+  return `
+    ${L.title ? `<h3 class="ml-title">${esc(L.title)}</h3>` : ''}
+    ${L.explanation ? `<p class="ml-text">${esc(L.explanation)}</p>` : ''}
+    ${L.pattern ? `<div class="ml-pattern"><span class="ml-label">Kalıp</span>${esc(L.pattern)}</div>` : ''}
+    ${L.examples.length ? `<div class="ml-sec"><span class="ml-label">Örnekler</span>
+      ${L.examples.map((e) => `<div class="ml-ex">
+        <div style="flex:1; min-width:0"><p class="ml-en">${esc(e.en)}</p>${e.tr ? `<p class="ml-tr">${esc(e.tr)}</p>` : ''}</div>
+        <button type="button" class="replay" data-say="${esc(e.en)}" aria-label="Örneği dinle">${SPK}</button>
+      </div>`).join('')}</div>` : ''}
+    ${L.wrongRight.length ? `<div class="ml-sec"><span class="ml-label">Yanlış → Doğru</span>
+      ${L.wrongRight.map((w) => `<p class="ml-wr"><span class="ml-wrong">${esc(w.wrong)}</span> → <span class="ml-right">${esc(w.right)}</span></p>`).join('')}</div>` : ''}
+    ${L.tip ? `<div class="ml-tip"><span class="ml-label" style="color:var(--amber)">İpucu</span>${esc(L.tip)}</div>` : ''}
+    ${L.practice ? `<div class="ml-sec"><span class="ml-label">Kendini dene</span>
+      <p class="ml-en">${esc(L.practice.q)}</p>
+      <details class="ml-ans"><summary>Örnek cevabı göster</summary><p class="ml-right" style="margin-top:6px">${esc(L.practice.a)}</p></details>
+      <p class="small">İpucu: Bu soruyu bir sonraki derste öğretmene de cevaplayabilirsin.</p></div>` : ''}
+    <button type="button" class="link-btn" data-regen="${m.id}">Anlatımı yeniden hazırla</button>`;
+}
+
 
 let tab = 'mistakes';
 let mFilter = 'active';
@@ -61,6 +96,12 @@ export async function renderProgress(c, sub) {
           </div>
           <p style="font-size:14px; line-height:1.45"><span style="color:#D9BC83; text-decoration:line-through">${esc(m.original)}</span> → <span style="font-weight:700; color:#FFE2A8">${esc(m.corrected)}</span></p>
           ${m.rule_tr ? `<p class="small">${esc(m.rule_tr)}</p>` : ''}
+          <button type="button" class="ml-toggle" data-open="${m.id}" aria-expanded="${openLessons.has(m.id)}">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/></svg>
+            <span style="flex:1; text-align:left">Konu anlatımı ve örnekler</span>
+            <svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+          </button>
+          ${openLessons.has(m.id) ? `<div class="mlesson">${lessonHtml(m, esc)}</div>` : ''}
           <div class="row-between">
             <div class="dots">${[0, 1, 2].map((i) => `<i class="${i < m.correctLessons.length ? 'on' : ''}"></i>`).join('')}<span>${Math.min(m.correctLessons.length, 3)} / ${RULES.learnedAfter} doğru kullanım</span></div>
             <div class="row" style="gap:6px">
@@ -70,6 +111,16 @@ export async function renderProgress(c, sub) {
           </div>
         </article>`).join('') : `<p class="muted">${mFilter === 'active' ? 'Aktif hata yok. Konuştukça yaptığın hatalar burada birikir.' : 'Henüz öğrenilen hata yok. Bir hatayı 3 farklı derste doğru kullanınca buraya geçer.'}</p>`}`;
 
+    body.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', async () => {
+      const id = b.dataset.open;
+      if (openLessons.has(id)) { openLessons.delete(id); renderProgress(c); return; }
+      openLessons.add(id);
+      const m = list.find((x) => x.id === id);
+      if (m && !m.lesson) await makeLesson(c, id);
+      else renderProgress(c);
+    }));
+    body.querySelectorAll('[data-regen]').forEach((b) => b.addEventListener('click', () => makeLesson(c, b.dataset.regen)));
+    body.querySelectorAll('[data-say]').forEach((b) => b.addEventListener('click', () => sayText(c, b.dataset.say, b)));
     body.querySelectorAll('[data-mf]').forEach((b) => b.addEventListener('click', () => { mFilter = b.dataset.mf; renderProgress(c); }));
     body.querySelectorAll('[data-learn]').forEach((b) => b.addEventListener('click', async () => {
       const all = await loadMistakes();
@@ -148,4 +199,40 @@ function levelChart(profile) {
     <path d="${d}" fill="none" stroke="#7C8CFF" stroke-width="3" stroke-linejoin="round"/>
     <circle cx="${x(pts.length - 1)}" cy="${y(idx[idx.length - 1])}" r="5" fill="#3DD68C"/>
   </svg>`;
+}
+
+async function makeLesson(c, id) {
+  const { state, toast } = c;
+  if (!state.settings.apiKey) { toast('Önce Ayarlar’dan API anahtarını gir.'); renderProgress(c); return; }
+  if (loadingLessons.has(id)) return;
+  loadingLessons.add(id);
+  // Yeniden hazırlarken eski anlatımı gizle
+  const all = await loadMistakes();
+  const m = all.find((x) => x.id === id);
+  if (m && m.lesson) { delete m.lesson; await saveMistakes(all); }
+  renderProgress(c);
+  try {
+    await explainMistake(state.settings, id, state.profile.level);
+  } catch (e) {
+    toast(e.message);
+  }
+  loadingLessons.delete(id);
+  if (location.hash.startsWith('#progress')) renderProgress(c);
+}
+
+async function sayText(c, text, btn) {
+  const { state, toast } = c;
+  if (!state.settings.apiKey) { toast('Önce Ayarlar’dan API anahtarını gir.'); return; }
+  if (player) { player.pause(); player = null; }
+  btn.disabled = true;
+  try {
+    const blob = await speak(state.settings, text, ttsInstructions(state.settings, state.profile.level));
+    player = new Audio(URL.createObjectURL(blob));
+    player.preservesPitch = true;
+    player.playbackRate = playbackRate(state.settings, state.profile.level);
+    await player.play();
+  } catch (e) {
+    toast(e.message);
+  }
+  btn.disabled = false;
 }
