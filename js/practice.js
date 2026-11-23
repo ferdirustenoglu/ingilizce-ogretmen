@@ -191,6 +191,7 @@ function drawWrite(ctx, s, item) {
     <button type="button" class="link-btn small-link" id="bad">${IC.flag} Bu Türkçe cümle hatalı / doğal değil</button>
   </div>
   <div class="composer">
+    <p class="comp-tr" aria-hidden="true">${highlight(item.tr, item.trFocus)}</p>
     <div class="comp-row">
       <label class="sr-only" for="ans">İngilizcesini yaz</label>
       <textarea id="ans" rows="2" autocomplete="off" autocapitalize="sentences" spellcheck="false" placeholder="İngilizcesini yaz…">${esc(item.draft || '')}</textarea>

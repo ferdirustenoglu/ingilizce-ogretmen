@@ -150,6 +150,10 @@ p { margin: 0; }
 .send[disabled] { opacity: 0.4; }
 .send.busy { animation: pulse 1s infinite; }
 @keyframes pulse { 50% { opacity: 0.5; } }
+/* Klavye açıkken (yazma alanı odaktayken) Türkçe cümle yazma alanının hemen üstünde görünür */
+.comp-tr { display: none; margin: 0 2px 8px; font-size: 16px; font-weight: 700; line-height: 1.35; color: var(--text); }
+.comp-tr mark { background: var(--amber-bg); color: var(--amber); border-radius: 5px; padding: 0 3px; }
+.composer:focus-within .comp-tr { display: block; }
 .comp-foot { display: flex; align-items: center; justify-content: space-between; padding: 2px 4px 0; }
 .comp-foot .link-btn { min-height: 30px; }
 .footer { display: flex; gap: 8px; }
