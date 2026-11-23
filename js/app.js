@@ -11,6 +11,7 @@ import { renderPron, loadPronWords } from './pron.js';
 import { stopPlayback } from './audio.js';
 import { renderWordCards } from './wordcards.js';
 import { levelProgress } from './analysis.js';
+import { renderWorkshop } from './workshop.js';
 
 // ---------- Uygulama durumu ----------
 const state = {
@@ -72,6 +73,7 @@ const ROUTES = {
   lesson: () => renderLesson(C()),
   summary: (sub) => renderSummary(C(), sub),
   pron: (sub) => renderPron(C(), sub),
+  atolye: (sub) => renderWorkshop(C(), sub),
 };
 let currentRoute = null;
 
@@ -85,7 +87,7 @@ function route() {
     if (a.dataset.tab === name) a.setAttribute('aria-current', 'page');
     else a.removeAttribute('aria-current');
   });
-  document.querySelector('.nav').style.display = name === 'lesson' ? 'none' : '';
+  document.querySelector('.nav').style.display = name === 'lesson' || (name === 'atolye' && sub === 'calis') ? 'none' : '';
   render(sub);
   window.scrollTo(0, 0);
 }
@@ -136,6 +138,17 @@ async function renderHome() {
         : `<p class="muted">Konu seçilmedi. Öğretmen serbest sohbet yapar.</p>`}
       <p class="small">${study.words.length} kelime</p>
     </section>
+
+    <a class="card row" href="#atolye" style="flex-direction:row; align-items:center; gap:12px; text-decoration:none; color:var(--text)">
+      <div style="width:40px; height:40px; border-radius:12px; background:var(--amber-bg); color:var(--amber); display:flex; align-items:center; justify-content:center; flex-shrink:0">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+      </div>
+      <div style="flex:1; display:flex; flex-direction:column; gap:2px">
+        <span style="font-size:14px; font-weight:700">Cümle Atölyesi</span>
+        <span class="small">Türkçe cümleyi kalıplarla İngilizceye çevir</span>
+      </div>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9AA3CF" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+    </a>
 
     <a class="card row" href="#pron" style="flex-direction:row; align-items:center; gap:12px; text-decoration:none; color:var(--text)">
       <div style="width:40px; height:40px; border-radius:12px; background:var(--surface-2); color:var(--accent-text); display:flex; align-items:center; justify-content:center; flex-shrink:0">
@@ -532,7 +545,7 @@ function renderSettings() {
       <button type="button" class="btn btn-danger" id="resetAll">Tüm verileri sıfırla</button>
     </section>
 
-    <p class="small" style="text-align:center">İngilizce Öğretmen · v1.0</p>
+    <p class="small" style="text-align:center">İngilizce Öğretmen · v1.2</p>
   </div>`;
 
   const persist = () => saveSettings(state.settings);
