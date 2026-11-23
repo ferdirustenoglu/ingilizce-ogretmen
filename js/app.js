@@ -11,7 +11,7 @@ import { renderPron, loadPronWords } from './pron.js';
 import { stopPlayback } from './audio.js';
 import { renderWordCards } from './wordcards.js';
 import { levelProgress } from './analysis.js';
-import { renderWorkshop } from './workshop.js';
+import { renderWorkshop, resetWorkshopCache } from './workshop.js';
 
 // ---------- Uygulama durumu ----------
 const state = {
@@ -545,7 +545,7 @@ function renderSettings() {
       <button type="button" class="btn btn-danger" id="resetAll">Tüm verileri sıfırla</button>
     </section>
 
-    <p class="small" style="text-align:center">İngilizce Öğretmen · v1.2</p>
+    <p class="small" style="text-align:center">İngilizce Öğretmen · v1.3</p>
   </div>`;
 
   const persist = () => saveSettings(state.settings);
@@ -649,6 +649,7 @@ function renderSettings() {
     try {
       const keepKey = state.settings.apiKey;
       await importAll(JSON.parse(await file.text()));
+      resetWorkshopCache();
       await loadState();
       if (!state.settings.apiKey && keepKey) {
         state.settings.apiKey = keepKey;
@@ -665,6 +666,7 @@ function renderSettings() {
     if (!confirm('Seviyen, çalışmaların ve tüm kayıtların silinecek. Emin misin?')) return;
     if (!confirm('Bu işlem geri alınamaz. Son kez soruyorum: silinsin mi?')) return;
     await db.clear();
+    resetWorkshopCache();
     await loadState();
     toast('Tüm veriler silindi.');
     renderSettings();

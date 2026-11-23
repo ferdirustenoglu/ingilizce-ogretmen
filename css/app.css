@@ -544,3 +544,105 @@ mark.unsure { background: transparent; color: var(--amber); text-decoration: und
 .ws-tipbox svg { flex-shrink: 0; margin-top: 2px; }
 .ws-tipbox p { margin: 0; color: #EED9B5; font-size: 13px; line-height: 1.5; }
 .nav a { min-width: 60px; }
+
+/* ---------- Atölye: sıkı (kompakt) görünüm ---------- */
+.ws-page { padding: 16px 16px 20px; gap: 12px; }
+.ws-page h1 { font-size: 22px; }
+.ws-page h2 { font-size: 14px; }
+.ws-page .card { padding: 12px 14px; border-radius: 16px; gap: 8px; }
+.ws-page .btn { min-height: 46px; font-size: 15px; border-radius: 14px; }
+.ws-page .btn-big { min-height: 50px; font-size: 16px; }
+.ws-page .stat { padding: 10px; }
+.ws-page .stat b { font-size: 18px; }
+.ws-head { gap: 8px; }
+.ws-head .icon-btn { width: 38px; height: 38px; border-radius: 12px; }
+.ws-head .ws-chips { gap: 4px; font-size: 13px !important; }
+.ws-head .ws-chip-tr, .ws-head .ws-chip-en { font-size: 13px; padding: 2px 6px; }
+.ws-head .ws-chips svg { width: 14px; height: 14px; }
+.ws-head .small { font-size: 11px; }
+.ws-badge { font-size: 12px; padding: 4px 8px; }
+.ws-chip-tr, .ws-chip-en { font-size: 13px; padding: 3px 7px; }
+.ws-option { padding: 10px 12px; gap: 12px; border-radius: 14px; }
+.ws-oi { width: 38px; height: 38px; border-radius: 12px; }
+.ws-oi svg { width: 19px; height: 19px; }
+.ws-ot b { font-size: 15px; }
+.ws-prow { border-radius: 14px; padding: 4px 6px 4px 10px; }
+.ws-plabel { min-height: 44px; gap: 10px; }
+.ws-plabel input { width: 20px; height: 20px; }
+.ws-footbar { padding: 8px 16px 10px; gap: 6px; }
+.ws-footbar .btn { min-height: 46px; }
+
+.ws-ex { gap: 10px; }
+.ws-sentence { font-size: 18px; line-height: 1.35; }
+.ws-sentence.sm { font-size: 15px; font-weight: 600; color: var(--soft); }
+.ws-tr { padding: 14px; gap: 10px; }
+.tk-line { gap: 8px 10px; padding-top: 10px; }
+.tk { gap: 2px; }
+.tk b { font-size: 15px; padding-bottom: 2px; border-bottom-width: 2px; }
+.tk i { font-size: 9px; }
+.ws-legend { font-size: 11px; gap: 4px 10px; }
+.ws-legend .dot { width: 8px; height: 8px; }
+.ws-hintbtns { gap: 5px; }
+.ws-hbtn { min-height: 36px; font-size: 12px; border-radius: 10px; gap: 4px; padding: 0 4px; }
+.ws-hbtn.active { outline: 2px solid var(--amber); outline-offset: -1px; }
+.ws-hint { padding: 12px; gap: 8px; border-radius: 14px; }
+.ws-note { font-size: 13px; line-height: 1.45; }
+.ws-t2 { font-size: 15px; line-height: 1.55; }
+.ws-formula { font-size: 14px; }
+.ws-tool { padding: 8px 10px; gap: 2px; }
+.ws-tool-t { font-size: 12px; }
+.ws-tool .ws-note { font-size: 12px; }
+.ws-words { font-size: 14px; gap: 4px; }
+.ws-cap { font-size: 10px; }
+
+.blk-row { gap: 4px; }
+.blk { font-size: 13px; padding: 4px 7px; border-radius: 8px; gap: 1px; border-width: 1.5px; }
+.blk small { font-size: 9px; }
+.ws-steps { display: flex; flex-direction: column; gap: 6px; }
+.ws-step { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; line-height: 1.4; }
+.ws-step .blk { min-width: 26px; padding: 3px 5px; flex-shrink: 0; }
+.ws-step .en { color: var(--text); }
+.ws-details summary { list-style: none; cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
+.ws-details summary::-webkit-details-marker { display: none; }
+.ws-details summary .ws-cap::after { content: ' ▾'; }
+.ws-details[open] summary { margin-bottom: 6px; }
+
+.ws-with-composer { padding-bottom: 130px; }
+.ws-with-footer { padding-bottom: 90px; }
+.ws-composer, .ws-footer {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 12; max-width: 560px; margin: 0 auto;
+  background: var(--nav); border-top: 1px solid var(--line);
+  padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+}
+.ws-comp-row { display: flex; align-items: flex-end; gap: 8px; }
+.ws-comp-row textarea {
+  flex: 1; min-height: 48px; max-height: 120px; resize: none; border-radius: 14px; padding: 10px 12px;
+  background: var(--surface); border: 1.5px solid var(--accent); color: var(--text); font: inherit; font-size: 16px; line-height: 1.35; outline: none;
+}
+.ws-send { width: 48px; height: 48px; border-radius: 50%; border: none; background: var(--accent); color: var(--bg); display: flex; align-items: center; justify-content: center; flex-shrink: 0; cursor: pointer; }
+.ws-send[disabled] { opacity: 0.4; }
+.ws-comp-foot { display: flex; align-items: center; justify-content: space-between; padding: 2px 4px 0; }
+.ws-comp-foot .link-btn { min-height: 32px; font-size: 13px; }
+.ws-footer { display: flex; gap: 8px; }
+.ws-fbtn { min-height: 46px; font-size: 15px; border-radius: 14px; padding: 0 14px; }
+
+.ws-banner { padding: 10px 12px; gap: 10px; border-radius: 14px; }
+.ws-bi { width: 30px; height: 30px; border-radius: 9px; font-size: 16px; }
+.ws-banner .ws-bi svg { width: 18px; height: 18px; }
+.ws-bt { display: flex; flex-direction: column; gap: 1px; }
+.ws-banner b { font-size: 15px; }
+.ws-banner .ws-bt span { font-size: 12px; opacity: 0.9; }
+.ws-c { padding: 12px; gap: 8px; }
+.ws-en { font-size: 15px; font-weight: 700; line-height: 1.4; margin: 0; }
+.ws-pill { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 0 12px; border-radius: 99px; border: 1.5px solid var(--line-strong); background: transparent; color: var(--text); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.ws-pill svg { width: 15px; height: 15px; }
+.ws-why { display: flex; flex-direction: column; gap: 4px; padding: 6px 0; border-top: 1px solid var(--line); }
+.ws-why:first-of-type { border-top: none; padding-top: 0; }
+.ws-why-t { font-size: 13px; color: var(--amber); }
+.ws-tag { font-size: 12px; padding: 2px 7px; }
+.ws-eg { margin: 0; font-size: 13px; color: var(--accent-text); font-style: italic; }
+.ws-praise { background: var(--green-bg); color: var(--green-text); border-radius: 12px; padding: 8px 12px; }
+.ws-ring { width: 72px; height: 72px; }
+.ws-ring > div { width: 56px; height: 56px; font-size: 16px; }
+.ws-tri .cor { width: 120px; padding: 8px 10px; }
+.ws-tri .cor b { font-size: 17px; }

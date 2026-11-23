@@ -17,7 +17,10 @@ export function textCost(model, usage) {
   if (!usage) return 0;
   const key = Object.keys(TEXT_PRICES).find((k) => model.startsWith(k));
   const [pin, pout] = TEXT_PRICES[key] || TEXT_PRICES['gpt-5-mini'];
-  return ((usage.prompt_tokens || 0) * pin + (usage.completion_tokens || 0) * pout) / 1e6;
+  // Önbellekten gelen giriş tokenları %90 indirimli
+  const cached = usage.prompt_tokens_details?.cached_tokens || 0;
+  const fresh = (usage.prompt_tokens || 0) - cached;
+  return (fresh * pin + cached * pin * 0.1 + (usage.completion_tokens || 0) * pout) / 1e6;
 }
 export const transcribeCost = (seconds, settings) => (seconds / 60) * (settings && settings.transcribeQuality !== 'standard' ? 0.006 : TRANSCRIBE_PER_MIN);
 export const ttsCost = (seconds) => (seconds / 60) * TTS_PER_MIN;

@@ -18,6 +18,22 @@ const MAX_EXTRA = 6;
 // Ekranlar arası geçici durum (kaydedilmez)
 const ui = { layer: 'ek', search: '', selected: new Set(), topicSearch: '', openCats: new Set() };
 let genPromise = null;
+// Oturumun tek kaynağı: bellekteki nesne. Kayıtlar sırayla yazılır (yarış durumu olmaz).
+let cur = null;
+let saveChain = Promise.resolve();
+async function getSession() {
+  if (!cur) cur = await loadSession();
+  return cur;
+}
+// Veriler silinince veya yedek yüklenince bellekteki oturumu unut
+export function resetWorkshopCache() { cur = null; }
+
+function persist() {
+  if (!cur) return saveChain;
+  const snap = JSON.parse(JSON.stringify(cur));
+  saveChain = saveChain.then(() => saveSession(snap)).catch(() => {});
+  return saveChain;
+}
 let genError = null;
 
 const IC = {
@@ -118,7 +134,7 @@ function requireKey(ctx) {
 // ---------- Ana ekran ----------
 async function renderHome(ctx) {
   const { app, state, esc } = ctx;
-  const [session, stats] = [await loadSession(), await loadWsStats()];
+  const [session, stats] = [await getSession(), await loadWsStats()];
   const day = stats.days[today()] || { n: 0, first: 0, mistakes: 0 };
   const active = session && !session.done ? session : null;
   const words = state.study.words;
@@ -142,7 +158,7 @@ async function renderHome(ctx) {
   }
 
   app.innerHTML = `
-  <div class="page">
+  <div class="page ws-page">
     <div class="row-between" style="align-items:flex-start">
       <div style="display:flex; flex-direction:column; gap:4px">
         <h1>Cümle Atölyesi</h1>
@@ -195,7 +211,7 @@ async function renderPicker(ctx) {
   const { app, esc } = ctx;
   const stats = await loadWsStats();
   app.innerHTML = `
-  <div class="page" style="padding-bottom:120px">
+  <div class="page ws-page" style="padding-bottom:120px">
     ${header(ctx, { back: '#atolye', title: '<h1 style="font-size:22px">Kalıp seç</h1>' })}
     <label class="search">
       ${ctx.ICON.search}<span class="sr-only">Kalıp ara</span>
@@ -266,7 +282,7 @@ async function renderPicker(ctx) {
 function renderTopics(ctx) {
   const { app, esc } = ctx;
   app.innerHTML = `
-  <div class="page">
+  <div class="page ws-page">
     ${header(ctx, { back: '#atolye', title: '<h1 style="font-size:22px">Konu seç</h1>' })}
     <p class="muted">Bir konuya dokun, o konudan ${SESSION_SIZE} cümle hazırlansın.</p>
     <label class="search">
@@ -329,7 +345,8 @@ async function startSession(ctx, { mode, patternIds = [], topicId = null, n = SE
   };
   genPromise = null;
   genError = null;
-  await saveSession(session);
+  cur = session;
+  await persist();
   location.hash = '#atolye/calis';
 }
 
@@ -354,12 +371,10 @@ function ensureItems(ctx, session, { force = false } = {}) {
       focus: mistakes.filter((m) => !usedFocus.has(m.id)),
       avoid: [...stats.recent.slice(-25), ...session.items.map((it) => it.tr)],
     });
-    // Oturum bu arada değişmiş olabilir: güncelini al
-    const fresh = await loadSession();
-    if (!fresh || fresh.id !== session.id) return false;
-    fresh.items.push(...items.slice(0, fresh.target - fresh.items.length));
-    await saveSession(fresh);
-    Object.assign(session, fresh);
+    // Bu arada başka oturum başlamış olabilir
+    if (!cur || cur.id !== session.id) return false;
+    cur.items.push(...items.slice(0, cur.target - cur.items.length));
+    await persist();
     return true;
   })().catch((e) => { genError = e; throw e; }).finally(() => { genPromise = null; });
   return genPromise;
@@ -396,14 +411,14 @@ async function bumpMistakeStat() {
 // ---------- Alıştırma ----------
 async function renderExercise(ctx) {
   const { app, esc } = ctx;
-  const session = await loadSession();
+  const session = await getSession();
   if (!session) { location.hash = '#atolye'; return; }
   if (session.done) { location.hash = '#atolye/ozet'; return; }
 
   const item = session.items[session.idx];
   if (!item) {
     app.innerHTML = `
-    <div class="page">
+    <div class="page ws-page">
       ${header(ctx, { back: '#atolye', title: '<span style="font-weight:700">Cümle Atölyesi</span>' })}
       <div class="card ws-loading" id="wsLoad">
         <div class="typing"><span></span><span></span><span></span></div>
@@ -441,67 +456,61 @@ function exHeader(ctx, session, item) {
 
 const HINTS = ['Sıra', 'Açık TR', 'Kural', 'Kelime'];
 
-function hintPanels(ctx, item) {
+// Tek bir ipucu paneli (sekmeli gösterim)
+function hintPanel(ctx, item, i) {
   const { esc } = ctx;
-  const out = [];
-  if (item.hints >= 1) {
-    out.push(`<div class="ws-hint"><span class="ws-hh"><span class="num">1</span>Sırayı çevir</span>
-      <span class="ws-cap">Türkçe</span>${blocksHtml(esc, item.pieces.map((pc) => ({ ...pc, t: pc.s && !pc.t.startsWith('-') ? '-' + pc.t : pc.t })))}
-      ${IC.down}
-      <span class="ws-cap">İngilizce sırası</span>${blocksHtml(esc, item.parts, 'hidden')}
-      <p class="ws-note">${esc(TOOLS.sira.short)}</p></div>`);
+  if (i === 0) {
+    return `<div class="ws-hint">
+      ${item.pieces.length ? `<span class="ws-cap">Türkçe sıra</span>${blocksHtml(esc, item.pieces.map((pc) => ({ ...pc, t: pc.s && !pc.t.startsWith('-') ? '-' + pc.t : pc.t })))}` : ''}
+      <span class="ws-cap">İngilizce sıra</span>${blocksHtml(esc, item.parts, 'hidden')}
+      <p class="ws-note">${esc(TOOLS.sira.short)}</p></div>`;
   }
-  if (item.hints >= 2) {
-    out.push(`<div class="ws-hint"><span class="ws-hh"><span class="num">2</span>Açılmış Türkçe</span>
+  if (i === 1) {
+    return `<div class="ws-hint">
       <p class="ws-t2">${item.t2 ? t2Html(esc, item.t2) : esc(item.tr)}</p>
-      <p class="ws-note">${esc(TOOLS.t2.short)}</p></div>`);
+      <p class="ws-note">${esc(TOOLS.t2.short)}</p></div>`;
   }
-  if (item.hints >= 3) {
+  if (i === 2) {
     const p = item.pattern ? patternById(item.pattern) : null;
-    out.push(`<div class="ws-hint"><span class="ws-hh"><span class="num">3</span>Kural</span>
+    return `<div class="ws-hint">
       ${p ? `<p class="ws-formula">${esc(p.formula)}</p>` : ''}
       ${item.rule ? `<p class="ws-note">${esc(item.rule)}</p>` : ''}
+      ${item.steps.length ? `<div class="ws-steps">${item.steps.map((st) => `<div class="ws-step"><span class="blk r-${st.r}"><small>${esc(ROLES[st.r].short)}</small></span><span><b>${esc(st.tr || '—')}</b>${st.note ? ` <span class="small">· ${esc(st.note)}</span>` : ''}</span></div>`).join('')}</div>` : ''}
       ${toolCards(esc, item.tools.filter((t) => t !== 'sira' && t !== 't2'))}
-      ${p ? `<a href="#atolye/kart.${p.id}" class="ws-link">${esc(p.title)} kartını aç →</a>` : ''}</div>`);
+      ${p ? `<a href="#atolye/kart.${p.id}" class="ws-link">${esc(p.title)} kartı →</a>` : ''}</div>`;
   }
-  if (item.hints >= 4) {
-    out.push(`<div class="ws-hint"><span class="ws-hh"><span class="num">4</span>Kelimeler</span>
-      ${item.words.length ? `<div class="ws-words">${item.words.map((w) => `<span><b>${esc(w.tr)}</b> → ${esc(w.en)}</span>`).join('')}</div>` : '<p class="ws-note">Bu cümlede özel bir kelime yok.</p>'}</div>`);
-  }
-  return out.join('');
+  return `<div class="ws-hint">${item.words.length
+    ? `<div class="ws-words">${item.words.map((w) => `<span><b>${esc(w.tr)}</b> → ${esc(w.en)}</span>`).join('')}</div>`
+    : '<p class="ws-note">Bu cümlede özel bir kelime yok.</p>'}</div>`;
 }
 
 function drawWrite(ctx, session, item) {
   const { app, esc } = ctx;
   const roles = [...new Set(item.pieces.map((pc) => pc.r))];
+  const tab = item.hints ? Math.min(item.tab ?? item.hints - 1, item.hints - 1) : -1;
   app.innerHTML = `
-  <div class="page ws-ex">
+  <div class="page ws-page ws-ex ws-with-composer">
     ${exHeader(ctx, session, item)}
     <section class="card ws-tr">
-      <span class="ws-cap">Türkçe</span>
       <p class="ws-sentence">${esc(item.tr)}</p>
-      <div class="tk-line">${piecesHtml(esc, item.pieces)}</div>
-      ${legendHtml(roles)}
+      ${item.pieces.length ? `<div class="tk-line">${piecesHtml(esc, item.pieces)}</div>${legendHtml(roles)}` : ''}
     </section>
-
-    <div style="display:flex; flex-direction:column; gap:8px">
-      <span class="small" style="font-weight:600">Takılırsan ipucu aç (sırayla açılır)</span>
-      <div class="ws-hintbtns">
-        ${HINTS.map((h, i) => {
-          const open = item.hints > i;
-          const next = item.hints === i;
-          return `<button type="button" class="ws-hbtn${open ? ' open' : ''}" data-hint="${i}" ${open || next ? '' : 'disabled'}>${open || next ? `<span class="n">${i + 1}</span>` : IC.lock}${h}</button>`;
-        }).join('')}
-      </div>
-      <div id="hintPanels" style="display:flex; flex-direction:column; gap:10px">${hintPanels(ctx, item)}</div>
+    <div class="ws-hintbtns" role="tablist" aria-label="İpuçları">
+      ${HINTS.map((h, i) => {
+        const open = item.hints > i;
+        const nextOne = item.hints === i;
+        return `<button type="button" class="ws-hbtn${open ? ' open' : ''}${tab === i ? ' active' : ''}" data-hint="${i}" ${open || nextOne ? '' : 'disabled'}>${open || nextOne ? `<span class="n">${i + 1}</span>` : IC.lock}${h}</button>`;
+      }).join('')}
     </div>
-
-    <label style="display:flex; flex-direction:column; gap:8px">
-      <span class="small" style="font-weight:600">İngilizcesini yaz</span>
-      <textarea id="wsAns" class="ws-ans" rows="3" autocomplete="off" autocapitalize="sentences" spellcheck="false" placeholder="Cevabını buraya yaz…">${esc(item.draft || '')}</textarea>
-    </label>
-    <button type="button" class="btn btn-primary btn-big" id="wsCheck">Kontrol et</button>
-    <button type="button" class="link-btn" id="wsShow" style="text-align:center">Bilmiyorum, cevabı göster</button>
+    ${tab >= 0 ? hintPanel(ctx, item, tab) : '<p class="small" style="margin:-4px 0 0">Takılırsan ipuçlarını sırayla aç.</p>'}
+  </div>
+  <div class="ws-composer">
+    <div class="ws-comp-row">
+      <label class="sr-only" for="wsAns">İngilizcesini yaz</label>
+      <textarea id="wsAns" rows="2" autocomplete="off" autocapitalize="sentences" spellcheck="false" placeholder="İngilizcesini yaz…">${esc(item.draft || '')}</textarea>
+      <button type="button" class="ws-send" id="wsCheck" aria-label="Kontrol et">${IC.check.replace('width="14" height="14"', 'width="22" height="22"')}</button>
+    </div>
+    <div class="ws-comp-foot"><span class="small">Enter: kontrol et</span><button type="button" class="link-btn" id="wsShow">Cevabı göster</button></div>
   </div>`;
 
   const ta = app.querySelector('#wsAns');
@@ -521,20 +530,20 @@ function drawWrite(ctx, session, item) {
 
   app.querySelectorAll('[data-hint]').forEach((b) => b.addEventListener('click', async () => {
     const i = +b.dataset.hint;
-    if (item.hints > i) return;
-    item.hints = i + 1;
+    if (item.hints <= i) item.hints = i + 1;
+    item.tab = i;
     item.draft = ta.value;
     await saveItem(session, item);
+    const hadFocus = document.activeElement === ta;
     drawWrite(ctx, session, item);
-    const panels = app.querySelectorAll('.ws-hint');
-    panels[panels.length - 1]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (hadFocus) app.querySelector('#wsAns')?.focus();
   }));
 
   btn.addEventListener('click', () => submit(ctx, session, item, ta.value.trim()));
   app.querySelector('#wsShow').addEventListener('click', async () => {
     item.status = 'shown';
     item.check = {
-      verdict: 'shown', summary: '', userParts: [], fixed: item.answer, fixedParts: item.parts,
+      verdict: 'shown', summary: '', praise: '', userParts: [], fixed: item.answer, fixedParts: item.parts,
       explain: [], also: null, text: '',
     };
     if (item.attempts === 0) { item.attempts = 1; await updateStats(session, item, { verdict: 'shown' }); }
@@ -543,19 +552,9 @@ function drawWrite(ctx, session, item) {
   });
 }
 
-async function saveItem(session, item) {
-  const fresh = await loadSession();
-  if (!fresh || fresh.id !== session.id) return;
-  const i = fresh.items.findIndex((x) => x.id === item.id);
-  if (i >= 0) fresh.items[i] = item;
-  fresh.idx = session.idx;
-  fresh.target = session.target;
-  fresh.extra = session.extra;
-  fresh.wordsOk = session.wordsOk;
-  fresh.wordsBad = session.wordsBad;
-  fresh.added = session.added;
-  await saveSession(fresh);
-  Object.assign(session, fresh);
+// item, oturumdaki nesnenin kendisi; değişiklikleri kaydetmek yeterli
+function saveItem() {
+  return persist();
 }
 
 async function submit(ctx, session, item, text) {
@@ -596,11 +595,18 @@ async function submit(ctx, session, item, text) {
 }
 
 const BANNERS = {
-  correct: { cls: 'ok', title: 'Doğru!', text: 'Harika, cümleyi doğru kurdun.' },
+  correct: { cls: 'ok', title: 'Doğru!', text: 'Cümleyi doğru kurdun.' },
   close: { cls: 'close', title: 'Neredeyse oldu', text: 'İskelet doğru, küçük bir eksik var.' },
   wrong: { cls: 'bad', title: 'Tekrar bakalım', text: 'Cümlenin yapısında sorun var.' },
-  shown: { cls: 'shown', title: 'Doğru cevap', text: 'İncele, sonra bir sonrakinde dene.' },
+  shown: { cls: 'shown', title: 'Doğru cevap', text: 'İncele, bir sonrakinde dene.' },
 };
+
+function stepsHtml(esc, steps) {
+  return `<div class="ws-steps">${steps.map((st) => `<div class="ws-step">
+    <span class="blk r-${st.r}"><small>${esc(ROLES[st.r].short)}</small></span>
+    <span><b>${esc(st.tr || '—')}</b> → <b class="en">${esc(st.en)}</b>${st.note ? `<br><span class="small">${esc(st.note)}</span>` : ''}</span>
+  </div>`).join('')}</div>`;
+}
 
 function drawResult(ctx, session, item) {
   const { app, esc } = ctx;
@@ -609,61 +615,65 @@ function drawResult(ctx, session, item) {
   const isLast = session.idx + 1 >= session.target;
   const more = c.verdict !== 'correct' && session.mode !== 'retry' && session.extra < MAX_EXTRA;
   const dailySame = normTxt(item.daily) === normTxt(c.fixed);
+  const pat = item.pattern ? patternById(item.pattern) : null;
+  const play = (what, label = 'Dinle') => `<button type="button" class="ws-pill ws-play" data-say="${what}" data-speed="normal">${IC.speaker}${label}</button>`;
 
   app.innerHTML = `
-  <div class="page ws-ex">
+  <div class="page ws-page ws-ex ws-with-footer">
     ${exHeader(ctx, session, item)}
-    <p class="ws-sentence" style="font-size:17px">${esc(item.tr)}</p>
+    <p class="ws-sentence sm">${esc(item.tr)}</p>
 
     <div class="ws-banner ${b.cls}">
       <span class="ws-bi">${c.verdict === 'correct' ? IC.check : '!'}</span>
-      <span style="display:flex; flex-direction:column; gap:2px"><b>${b.title}</b><span>${esc(c.summary || b.text)}</span></span>
+      <span class="ws-bt"><b>${b.title}</b><span>${esc(c.summary || b.text)}</span></span>
     </div>
 
-    <section class="card">
+    <section class="card ws-c">
       ${c.userParts.length ? `<span class="ws-cap">Senin cevabın</span>${blocksHtml(esc, c.userParts, 'check')}` : ''}
-      <span class="ws-cap" ${c.userParts.length ? 'style="margin-top:4px"' : ''}>Doğru hâli</span>
+      <span class="ws-cap">Doğru hâli</span>
       ${blocksHtml(esc, c.fixedParts)}
-      <div class="row" style="gap:8px">
-        <button type="button" class="btn btn-small ws-play" data-say="fixed" data-speed="normal">${IC.speaker} Dinle</button>
-        <button type="button" class="btn btn-small ws-play" data-say="fixed" data-speed="slow">Yavaş</button>
-      </div>
+      <div class="row" style="gap:6px">${play('fixed')}<button type="button" class="ws-pill ws-play" data-say="fixed" data-speed="slow">Yavaş</button></div>
     </section>
 
+    ${c.praise ? `<p class="ws-note ws-praise">${esc(c.praise)}</p>` : ''}
+
     ${c.explain.length ? `
-    <section class="card">
+    <section class="card ws-c">
       <span class="ws-cap">Neden?</span>
-      ${c.explain.map((e) => `<div class="ws-why">${e.tag ? `<span class="ws-tag">${esc(e.tag)}</span>` : ''}<p class="ws-note">${e.title ? `<b>${esc(e.title)}:</b> ` : ''}${esc(e.text)}</p></div>`).join('')}
+      ${c.explain.map((e) => `<div class="ws-why">
+        <div class="row" style="gap:8px; flex-wrap:wrap">${e.title ? `<b class="ws-why-t">${esc(e.title)}</b>` : ''}${e.tag ? `<span class="ws-tag">${esc(e.tag)}</span>` : ''}</div>
+        <p class="ws-note">${esc(e.text)}</p>
+        ${e.example ? `<p class="ws-eg">${esc(e.example)}</p>` : ''}
+      </div>`).join('')}
     </section>` : ''}
 
-    ${c.verdict === 'shown' && (item.rule || item.tools.length) ? `
-    <section class="card">
-      <span class="ws-cap">Kural</span>
-      ${item.rule ? `<p class="ws-note">${esc(item.rule)}</p>` : ''}
-      ${toolCards(esc, item.tools.filter((t) => t !== 'sira'))}
-    </section>` : ''}
+    ${item.steps.length ? `
+    <details class="card ws-c ws-details" ${c.verdict === 'correct' ? '' : 'open'}>
+      <summary><span class="ws-cap">Adım adım çözüm</span>${pat ? `<span class="small">${esc(pat.formula)}</span>` : ''}</summary>
+      ${stepsHtml(esc, item.steps)}
+      ${item.rule ? `<p class="ws-note" style="margin-top:4px">${esc(item.rule)}</p>` : ''}
+    </details>` : ''}
 
     ${c.also ? `
-    <section class="card" style="background:var(--green-bg)">
+    <section class="card ws-c" style="background:var(--green-bg)">
       <span class="ws-cap" style="color:var(--green-text)">Bu da doğru</span>
-      <p style="font-size:16px; font-weight:700">${esc(c.also.en)}</p>
+      <p class="ws-en">${esc(c.also.en)}</p>
       ${c.also.note ? `<p class="ws-note" style="color:#BFEFD6">${esc(c.also.note)}</p>` : ''}
     </section>` : ''}
 
-    <section class="card ws-daily">
+    <section class="card ws-c ws-daily">
       <span class="ws-cap" style="color:var(--accent-text); display:flex; align-items:center; gap:6px">${IC.chat} Günlük konuşmada böyle denir</span>
-      <p style="font-size:17px; font-weight:700; line-height:1.4">${esc(item.daily)}</p>
-      <p class="ws-note">${esc(item.dailyNote || (dailySame ? 'Bu cümle günlük konuşmada da aynen böyle söylenir.' : ''))}</p>
-      <div><button type="button" class="btn btn-small ws-play" data-say="daily" data-speed="normal">${IC.speaker} Dinle</button></div>
+      <p class="ws-en">${esc(item.daily)}</p>
+      <p class="ws-note">${esc(item.dailyNote || (dailySame ? 'Günlük konuşmada da aynen böyle söylenir.' : ''))}</p>
+      <div>${play('daily')}</div>
     </section>
 
     ${c.addedKey ? `<div class="row small" style="gap:8px; align-items:flex-start">${IC.bank}<span>Hata Bankası'na eklendi: <b style="color:var(--text)">${esc(c.mistake?.rule_tr || c.addedKey)}</b></span></div>` : ''}
-
-    <div style="display:flex; flex-direction:column; gap:8px; margin-top:4px">
-      <button type="button" class="btn btn-primary btn-big" id="wsNext">${more ? 'Aynı kalıpla 2 cümle daha' : isLast ? 'Oturumu bitir' : 'Sıradaki cümle'} ${IC.arrow}</button>
-      ${c.verdict === 'close' || c.verdict === 'wrong' ? '<button type="button" class="btn" id="wsRetry">Düzeltip tekrar dene</button>' : ''}
-      ${more ? `<button type="button" class="link-btn" id="wsSkip" style="text-align:center">${isLast ? 'Oturumu bitir' : 'Ek cümle istemiyorum, devam et'}</button>` : ''}
-    </div>
+    ${more ? `<button type="button" class="link-btn" id="wsMore" style="text-align:left">+ Aynı kalıpla 2 cümle daha ekle</button>` : ''}
+  </div>
+  <div class="ws-footer">
+    ${c.verdict === 'close' || c.verdict === 'wrong' ? '<button type="button" class="btn ws-fbtn" id="wsRetry">Tekrar dene</button>' : ''}
+    <button type="button" class="btn btn-primary ws-fbtn" id="wsNext" style="flex:1">${isLast ? 'Oturumu bitir' : 'Sıradaki'} ${IC.arrow}</button>
   </div>`;
 
   app.querySelectorAll('.ws-play').forEach((btn) => btn.addEventListener('click', async () => {
@@ -676,9 +686,8 @@ function drawResult(ctx, session, item) {
     drawWrite(ctx, session, item);
     app.querySelector('#wsAns')?.focus();
   });
-  app.querySelector('#wsSkip')?.addEventListener('click', () => next(ctx, session));
-  app.querySelector('#wsNext').addEventListener('click', async (e) => {
-    if (!more) return next(ctx, session);
+  app.querySelector('#wsNext').addEventListener('click', () => next(ctx, session));
+  app.querySelector('#wsMore')?.addEventListener('click', async (e) => {
     const btn = e.currentTarget;
     btn.disabled = true;
     btn.textContent = 'Cümleler hazırlanıyor…';
@@ -697,39 +706,32 @@ function drawResult(ctx, session, item) {
       session.items.splice(session.idx + 1, 0, ...add);
       session.target += add.length;
       session.extra += add.length;
-      const fresh = await loadSession();
-      if (fresh && fresh.id === session.id) {
-        fresh.items = session.items;
-        fresh.target = session.target;
-        fresh.extra = session.extra;
-        await saveSession(fresh);
-      }
-      next(ctx, session);
+      await persist();
+      btn.textContent = `✓ ${add.length} cümle eklendi`;
+      app.querySelector('#wsNext').innerHTML = 'Sıradaki ' + IC.arrow;
     } catch (err) {
       ctx.toast(err.message);
       btn.disabled = false;
-      btn.innerHTML = 'Aynı kalıpla 2 cümle daha ' + IC.arrow;
+      btn.textContent = '+ Aynı kalıpla 2 cümle daha ekle';
     }
   });
 }
 
 async function next(ctx, session) {
   stopPlayback();
-  const fresh = (await loadSession()) || session;
-  fresh.idx = Math.min(session.idx + 1, fresh.target);
-  if (fresh.idx >= fresh.target) {
-    fresh.done = true;
-    fresh.endedAt = new Date().toISOString();
-    await saveSession(fresh);
+  session.idx = Math.min(session.idx + 1, session.target);
+  if (session.idx >= session.target) {
+    session.done = true;
+    session.endedAt = new Date().toISOString();
+    await persist();
     const hist = await loadWsHistory();
-    const counts = countStatus(fresh.items.slice(0, fresh.target));
-    hist.unshift({ id: fresh.id, at: fresh.endedAt, mode: fresh.mode, patternIds: fresh.patternIds, topicId: fresh.topicId, ...counts });
+    const counts = countStatus(session.items.slice(0, session.target));
+    hist.unshift({ id: session.id, at: session.endedAt, mode: session.mode, patternIds: session.patternIds, topicId: session.topicId, ...counts });
     await saveWsHistory(hist);
     location.hash = '#atolye/ozet';
     return;
   }
-  await saveSession(fresh);
-  Object.assign(session, fresh);
+  await persist();
   window.scrollTo(0, 0);
   renderExercise(ctx);
 }
@@ -747,7 +749,7 @@ function countStatus(items) {
 // ---------- Oturum özeti ----------
 async function renderSummary(ctx) {
   const { app, esc, state } = ctx;
-  const session = await loadSession();
+  const session = await getSession();
   if (!session || !session.done) { location.hash = '#atolye'; return; }
   const items = session.items.slice(0, session.target);
   const c = countStatus(items);
@@ -773,7 +775,7 @@ async function renderSummary(ctx) {
   };
 
   app.innerHTML = `
-  <div class="page">
+  <div class="page ws-page">
     <div style="display:flex; flex-direction:column; gap:4px">
       <span class="small" style="font-weight:600">Oturum bitti · ${esc(what)}</span>
       <h1>${pct >= 70 ? 'Güzel çalıştın' : 'Çalışmaya devam'}</h1>
@@ -836,7 +838,7 @@ function renderCard(ctx, id) {
     </div>` : '';
   const layer = LAYERS.find((l) => l.id === p.layer);
   app.innerHTML = `
-  <div class="page">
+  <div class="page ws-page">
     ${header(ctx, { back: '#atolye/kalip', title: `<span class="small" style="font-weight:600">Kural kartı · ${esc(layer ? layer.title : '')}</span><h1 style="font-size:22px">${esc(p.title)}</h1>` })}
     <div class="ws-chips">${patternLabel(esc, p)}<span class="level-tag">${esc(p.level)}</span></div>
     <p style="color:var(--soft); font-size:15px; line-height:1.55">${esc(p.explain)}</p>

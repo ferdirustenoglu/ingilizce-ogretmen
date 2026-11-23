@@ -22,7 +22,7 @@ export const RULES = {
 const MISTAKE_TYPES = {
   tense: 'Zaman kipi', verb_form: 'Fiil hali', article: 'Article', preposition: 'Edat',
   word_choice: 'Kelime seçimi', word_order: 'Kelime sırası', agreement: 'Özne-fiil uyumu',
-  pronoun: 'Zamir', plural: 'Çoğul', question_form: 'Soru yapısı', other: 'Diğer',
+  pronoun: 'Zamir', plural: 'Çoğul', question_form: 'Soru yapısı', spelling: 'Yazım', other: 'Diğer',
 };
 export const mistakeTypeLabel = (t) => MISTAKE_TYPES[t] || MISTAKE_TYPES.other;
 
