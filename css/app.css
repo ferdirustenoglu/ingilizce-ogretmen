@@ -418,12 +418,12 @@ mark.unsure { background: transparent; color: var(--amber); text-decoration: und
 .hold-btn.rec { background: var(--green); border-color: var(--green); color: #0B2A1C; }
 
 /* ---------- Cümle Atölyesi ---------- */
-.r-O { --rc: #5BE3A2; --rb: #123B2A; }
-.r-F { --rc: #FFB547; --rb: #3B2F1A; }
-.r-IM { --rc: #AEB8FF; --rb: #1E2A5C; }
-.r-N { --rc: #FF9FD0; --rb: #3D1E33; }
-.r-Z { --rc: #7FDCEE; --rb: #123544; }
-.r-B { --rc: #D6B8FF; --rb: #2E2148; }
+.r-S { --rc: #5BE3A2; --rb: #123B2A; }
+.r-AUX { --rc: #FFB547; --rb: #3B2F1A; }
+.r-V { --rc: #AEB8FF; --rb: #1E2A5C; }
+.r-OBJ { --rc: #FF9FD0; --rb: #3D1E33; }
+.r-ADV { --rc: #7FDCEE; --rb: #123544; }
+.r-CONJ { --rc: #D6B8FF; --rb: #2E2148; }
 .r-X { --rc: #C3CAEB; --rb: #232C57; }
 
 .ws-head { display: flex; align-items: center; gap: 10px; }
@@ -472,7 +472,7 @@ mark.unsure { background: transparent; color: var(--amber); text-decoration: und
 .ws-legend em { font-style: normal; color: var(--muted); }
 .ws-legend .dot { width: 10px; height: 10px; border-radius: 3px; background: var(--rc); }
 
-.ws-hintbtns { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.ws-hintbtns { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
 .ws-hbtn {
   min-height: 44px; border-radius: 12px; border: 1.5px solid var(--line-strong); background: var(--surface);
   color: var(--soft); font: inherit; font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 0 6px; cursor: pointer;

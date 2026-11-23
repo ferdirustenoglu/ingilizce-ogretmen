@@ -545,7 +545,7 @@ function renderSettings() {
       <button type="button" class="btn btn-danger" id="resetAll">Tüm verileri sıfırla</button>
     </section>
 
-    <p class="small" style="text-align:center">İngilizce Öğretmen · v1.3</p>
+    <p class="small" style="text-align:center">İngilizce Öğretmen · v1.4</p>
   </div>`;
 
   const persist = () => saveSettings(state.settings);

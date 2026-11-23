@@ -51,7 +51,7 @@ export async function testApiKey(apiKey) {
 }
 
 // Metin modelinden JSON cevap al
-export async function chatJSON(settings, messages, maxTokens = 900, modelOverride = null) {
+export async function chatJSON(settings, messages, maxTokens = 900, modelOverride = null, effort = 'minimal') {
   const model = modelOverride || settings.models.chat;
   const body = {
     model,
@@ -60,7 +60,7 @@ export async function chatJSON(settings, messages, maxTokens = 900, modelOverrid
     max_completion_tokens: maxTokens,
   };
   // GPT-5 ailesinde düşünme süresini en aza indir (daha hızlı cevap)
-  if (model.startsWith('gpt-5')) body.reasoning_effort = 'minimal';
+  if (model.startsWith('gpt-5')) body.reasoning_effort = effort;
 
   let res = await post('/chat/completions', settings.apiKey, body);
   if (!res.ok && res.status === 400 && body.reasoning_effort) {

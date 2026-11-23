@@ -3,7 +3,7 @@
 
 import { TOPICS, CATEGORIES, LEVELS, topicById } from './topics.js';
 import { today } from './db.js';
-import { ROLES, TOOLS, LAYERS, PATTERNS, patternById } from './workshop-data.js';
+import { ROLES, LAYERS, PATTERNS, patternById, roleKey } from './workshop-data.js';
 import {
   generateItems, checkAnswer, recordResult,
   loadSession, saveSession, loadWsStats, saveWsStats, loadWsHistory, saveWsHistory,
@@ -22,8 +22,20 @@ let genPromise = null;
 let cur = null;
 let saveChain = Promise.resolve();
 async function getSession() {
-  if (!cur) cur = await loadSession();
+  if (!cur) cur = migrate(await loadSession());
   return cur;
+}
+// Eski sürümden kalan oturumdaki öğe kodlarını yenilerine çevir
+function migrate(sess) {
+  if (!sess) return sess;
+  const fix = (list) => (list || []).forEach((x) => { x.r = roleKey(x.r); });
+  sess.items.forEach((it) => {
+    fix(it.pieces); fix(it.parts); fix(it.steps);
+    if (it.check) { fix(it.check.userParts); fix(it.check.fixedParts); }
+    if (it.firstCheck) fix(it.firstCheck.userParts);
+    if (it.hints > 3) it.hints = 3;
+  });
+  return sess;
 }
 // Veriler silinince veya yedek yüklenince bellekteki oturumu unut
 export function resetWorkshopCache() { cur = null; }
@@ -97,8 +109,8 @@ function piecesHtml(esc, pieces) {
 }
 
 function legendHtml(roles) {
-  const seen = ['O', 'F', 'IM', 'N', 'Z', 'B'].filter((r) => roles.includes(r));
-  return `<div class="ws-legend">${seen.map((r) => `<span><span class="dot r-${r}"></span>${ROLES[r].label}${ROLES[r].std ? ` <em>(${ROLES[r].std})</em>` : ''}</span>`).join('')}</div>`;
+  const seen = ['S', 'AUX', 'V', 'OBJ', 'ADV', 'CONJ'].filter((r) => roles.includes(r));
+  return `<div class="ws-legend">${seen.map((r) => `<span><span class="dot r-${r}"></span>${ROLES[r].label}</span>`).join('')}</div>`;
 }
 
 // Öğe kutuları. mode: 'check' (✓/✗), 'plain', 'hidden' (soru işareti)
@@ -109,19 +121,6 @@ function blocksHtml(esc, parts, mode = 'plain') {
     const text = mode === 'hidden' ? '?' : esc(pc.t);
     return `<span class="blk r-${pc.r}${bad ? ' bad' : ''}"><span>${pc.hl ? `<u>${text}</u>` : text}</span><small>${esc(ROLES[pc.r].short)}${mark}</small></span>`;
   }).join('')}</div>`;
-}
-
-function t2Html(esc, t2) {
-  return esc(t2).replace(/\(([^)]+)\)/g, '<span class="t2-add">($1)</span>');
-}
-
-function toolCards(esc, ids) {
-  return ids.map((id) => {
-    const t = TOOLS[id];
-    if (!t) return '';
-    return `<div class="ws-tool"><span class="ws-tool-t">${esc(t.title)}</span><span class="ws-note">${esc(t.short)}</span>
-      <a href="#atolye/kart.${t.card}" class="ws-link">Kartı aç →</a></div>`;
-  }).join('');
 }
 
 function requireKey(ctx) {
@@ -236,7 +235,7 @@ async function renderPicker(ctx) {
     items.forEach((p) => {
       if (p.group !== lastGroup) {
         lastGroup = p.group;
-        html += `<span class="ws-cap" style="margin-top:6px">${esc(p.group)}${p.group === 'Ortaçlar' ? ' <span style="text-transform:none;font-weight:500">(yardımcı fiiller)</span>' : ''}</span>`;
+        html += `<span class="ws-cap" style="margin-top:6px">${esc(p.group)}</span>`;
       }
       const st = patternStatus(stats, p.id);
       const sel = ui.selected.has(p.id);
@@ -364,7 +363,7 @@ function ensureItems(ctx, session, { force = false } = {}) {
     const topic = session.topicId ? topicById(session.topicId) : null;
     const { items } = await generateItems(ctx.state.settings, {
       level: ctx.state.profile.level,
-      n: Math.min(BATCH, missing),
+      n: Math.min(session.items.length ? BATCH : 3, missing),
       patternIds: session.patternIds,
       topic,
       words: session.words,
@@ -423,7 +422,7 @@ async function renderExercise(ctx) {
       <div class="card ws-loading" id="wsLoad">
         <div class="typing"><span></span><span></span><span></span></div>
         <p>Cümleler hazırlanıyor…</p>
-        <p class="small">Seviyene ve seçimine göre ${Math.min(BATCH, session.target - session.items.length)} cümle yazılıyor.</p>
+        <p class="small">İlk cümleler seviyene ve seçimine göre yazılıyor. Bu 15–30 saniye sürebilir.</p>
       </div>
     </div>`;
     try {
@@ -454,34 +453,30 @@ function exHeader(ctx, session, item) {
     + `<div class="bar" style="height:6px"><div style="width:${Math.round((session.idx / session.target) * 100)}%"></div></div>`;
 }
 
-const HINTS = ['Sıra', 'Açık TR', 'Kural', 'Kelime'];
+const HINTS = ['Kalıp', 'Kelimeler', 'Baş harfler'];
+
+// Cevabın her kelimesinin ilk harfi: "I c__ h___ m_ f______"
+const initials = (text) => text.split(/\s+/).map((w) => w.replace(/[A-Za-z]/g, (ch, i) => (i === 0 ? ch : '_'))).join(' ');
 
 // Tek bir ipucu paneli (sekmeli gösterim)
 function hintPanel(ctx, item, i) {
   const { esc } = ctx;
   if (i === 0) {
-    return `<div class="ws-hint">
-      ${item.pieces.length ? `<span class="ws-cap">Türkçe sıra</span>${blocksHtml(esc, item.pieces.map((pc) => ({ ...pc, t: pc.s && !pc.t.startsWith('-') ? '-' + pc.t : pc.t })))}` : ''}
-      <span class="ws-cap">İngilizce sıra</span>${blocksHtml(esc, item.parts, 'hidden')}
-      <p class="ws-note">${esc(TOOLS.sira.short)}</p></div>`;
-  }
-  if (i === 1) {
-    return `<div class="ws-hint">
-      <p class="ws-t2">${item.t2 ? t2Html(esc, item.t2) : esc(item.tr)}</p>
-      <p class="ws-note">${esc(TOOLS.t2.short)}</p></div>`;
-  }
-  if (i === 2) {
     const p = item.pattern ? patternById(item.pattern) : null;
     return `<div class="ws-hint">
       ${p ? `<p class="ws-formula">${esc(p.formula)}</p>` : ''}
       ${item.rule ? `<p class="ws-note">${esc(item.rule)}</p>` : ''}
-      ${item.steps.length ? `<div class="ws-steps">${item.steps.map((st) => `<div class="ws-step"><span class="blk r-${st.r}"><small>${esc(ROLES[st.r].short)}</small></span><span><b>${esc(st.tr || '—')}</b>${st.note ? ` <span class="small">· ${esc(st.note)}</span>` : ''}</span></div>`).join('')}</div>` : ''}
-      ${toolCards(esc, item.tools.filter((t) => t !== 'sira' && t !== 't2'))}
+      <span class="ws-cap">İngilizce sıra</span>${blocksHtml(esc, item.parts.map((x) => ({ ...x, t: ROLES[x.r].label })))}
       ${p ? `<a href="#atolye/kart.${p.id}" class="ws-link">${esc(p.title)} kartı →</a>` : ''}</div>`;
   }
-  return `<div class="ws-hint">${item.words.length
-    ? `<div class="ws-words">${item.words.map((w) => `<span><b>${esc(w.tr)}</b> → ${esc(w.en)}</span>`).join('')}</div>`
-    : '<p class="ws-note">Bu cümlede özel bir kelime yok.</p>'}</div>`;
+  if (i === 1) {
+    return `<div class="ws-hint">${item.words.length
+      ? `<div class="ws-words">${item.words.map((w) => `<span><b>${esc(w.tr)}</b> → ${esc(w.en)}</span>`).join('')}</div>`
+      : '<p class="ws-note">Bu cümlede bilmen gereken özel bir kelime yok.</p>'}</div>`;
+  }
+  return `<div class="ws-hint">
+    ${blocksHtml(esc, item.parts.map((x) => ({ ...x, t: initials(x.t) })))}
+    <p class="ws-note">Her kelimenin ilk harfi. Gerisini sen tamamla.</p></div>`;
 }
 
 function drawWrite(ctx, session, item) {
@@ -758,20 +753,20 @@ async function renderSummary(ctx) {
   // Öğe bazında başarı (ilk denemeye göre)
   const roleStat = {};
   items.forEach((it) => (it.firstCheck?.userParts || []).forEach((pc) => {
-    if (!['O', 'F', 'IM', 'N', 'Z'].includes(pc.r)) return;
+    if (!['S', 'AUX', 'V', 'OBJ', 'ADV'].includes(pc.r)) return;
     const s = roleStat[pc.r] || (roleStat[pc.r] = { ok: 0, n: 0 });
     s.n++;
     if (pc.ok !== false) s.ok++;
   }));
-  const roles = ['O', 'F', 'IM', 'N', 'Z'].filter((r) => roleStat[r]);
+  const roles = ['S', 'AUX', 'V', 'OBJ', 'ADV'].filter((r) => roleStat[r]);
   const weakest = roles.filter((r) => roleStat[r].ok < roleStat[r].n).sort((a, b) => roleStat[a].ok / roleStat[a].n - roleStat[b].ok / roleStat[b].n)[0];
   const corrected = items.filter((it) => it.status !== 'first');
   const pats = session.patternIds.map(patternById).filter(Boolean);
   const topic = session.topicId ? topicById(session.topicId) : null;
   const what = session.mode === 'retry' ? 'Tekrar çalışması' : topic ? topic.title : pats.length ? pats.map((p) => `${p.tr} → ${p.en}`).join(', ') : 'Karışık';
   const weakText = {
-    O: 'özneyi (I, you, he…) yazmakta', F: 'ortaçta (can, must, did, have…)', IM: 'fiilin doğru hâlinde',
-    N: 'nesnenin önünde: edat ve the / a', Z: 'zarfların yerinde',
+    S: 'özneyi (I, you, he…) yazmakta', AUX: 'yardımcı fiilde (can, must, did, have…)', V: 'fiilin doğru hâlinde',
+    OBJ: 'nesnede: edat, a / the ve çoğul -s', ADV: 'zarfların yerinde',
   };
 
   app.innerHTML = `
@@ -829,20 +824,12 @@ function renderCard(ctx, id) {
   const { app, esc } = ctx;
   const p = patternById(id);
   if (!p) { location.hash = '#atolye/kalip'; return; }
-  const triangle = p.id === 'tool-hayat' ? `
-    <div class="ws-tri" aria-hidden="true">
-      <svg viewBox="0 0 350 216" width="100%" height="216"><path d="M175 40 L66 176 L284 176 Z" fill="none" stroke="#3A4579" stroke-width="2" stroke-dasharray="6 6"/></svg>
-      <div class="cor" style="left:50%; top:0; transform:translateX(-50%)"><b>the</b><span>malum, herkesin bildiği</span></div>
-      <div class="cor" style="left:0; top:140px"><b>a / an</b><span>bir, herhangi biri</span></div>
-      <div class="cor" style="right:0; top:140px"><b>-s</b><span>-ler, genel olarak hepsi</span></div>
-    </div>` : '';
   const layer = LAYERS.find((l) => l.id === p.layer);
   app.innerHTML = `
   <div class="page ws-page">
     ${header(ctx, { back: '#atolye/kalip', title: `<span class="small" style="font-weight:600">Kural kartı · ${esc(layer ? layer.title : '')}</span><h1 style="font-size:22px">${esc(p.title)}</h1>` })}
     <div class="ws-chips">${patternLabel(esc, p)}<span class="level-tag">${esc(p.level)}</span></div>
     <p style="color:var(--soft); font-size:15px; line-height:1.55">${esc(p.explain)}</p>
-    ${triangle}
     <section class="card"><span class="ws-cap">Kalıp</span><p class="ws-formula">${esc(p.formula)}</p></section>
     <section class="card" style="gap:0; padding:4px 16px">
       ${p.examples.map((e, i) => `<div class="ws-ex-row"${i === p.examples.length - 1 ? ' style="border-bottom:none"' : ''}>
@@ -852,7 +839,6 @@ function renderCard(ctx, id) {
       </div>`).join('')}
     </section>
     <div class="ws-tipbox">${IC.bulb}<p>${esc(p.tip)}</p></div>
-    ${p.tools.filter((t) => TOOLS[t] && TOOLS[t].card !== p.id).length ? `<span class="ws-cap">İşine yarayacak araçlar</span>${toolCards(esc, p.tools.filter((t) => TOOLS[t].card !== p.id))}` : ''}
     <button type="button" class="btn btn-primary btn-big" id="wsCardGo">Bu kuralla 5 cümle çalış</button>
   </div>`;
   app.querySelectorAll('.ws-say').forEach((b) => b.addEventListener('click', async () => {

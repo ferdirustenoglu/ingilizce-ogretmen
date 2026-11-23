@@ -3,7 +3,7 @@
 import { chatJSON } from './openai.js';
 import { addCost, today, db } from './db.js';
 import { RULESET } from './workshop-rules.js';
-import { TOOLS, roleKey, patternById } from './workshop-data.js';
+import { roleKey, patternById } from './workshop-data.js';
 import { loadMistakes, saveMistakes, RULES, mistakeTypeLabel } from './analysis.js';
 
 // ---------- Cümle üretme ----------
@@ -79,7 +79,6 @@ function normItem(x, allowedPatterns) {
     id: 'w' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
     tr: str(x.tr),
     pieces: piecesValid(pieces, str(x.tr)) ? pieces : [],
-    t2: str(x.t2),
     answer: str(x.answer),
     parts: normParts(x.parts, str(x.answer)),
     steps: (Array.isArray(x.steps) ? x.steps : []).filter((st) => st && (st.en || st.tr)).slice(0, 10)
@@ -87,8 +86,7 @@ function normItem(x, allowedPatterns) {
     daily: str(x.daily) || str(x.answer),
     dailyNote: str(x.daily_note_tr),
     rule: str(x.rule_tr),
-    tools: (Array.isArray(x.tools) ? x.tools : []).map(str).filter((t) => TOOLS[t]).slice(0, 3),
-    words: (Array.isArray(x.words) ? x.words : []).filter((w) => w && w.tr && w.en).slice(0, 4).map((w) => ({ tr: str(w.tr), en: str(w.en) })),
+    words: (Array.isArray(x.words) ? x.words : []).filter((w) => w && w.tr && w.en).map((w) => ({ tr: str(w.tr), en: str(w.en) })).filter((w) => w.tr.toLowerCase() !== w.en.toLowerCase()).slice(0, 4),
     pattern: allowedPatterns.includes(pat) ? pat : (patternById(pat) ? pat : ''),
     focus: str(x.focus),
     // oturum durumu
@@ -109,7 +107,7 @@ export async function generateItems(settings, opts) {
   const { data, cost } = await chatJSON(settings, [
     { role: 'system', content: RULESET },
     { role: 'user', content: genUser({ level: opts.level, n: opts.n, patterns, topic: opts.topic, words: opts.words || [], focus: opts.focus || [], avoid: opts.avoid || [] }) },
-  ], 1200 + opts.n * 900);
+  ], 2500 + opts.n * 900, null, 'low');
   await addCost(cost);
   const ids = patterns.map((p) => p.id);
   const items = (data.items || []).map((x) => normItem(x, ids)).filter(Boolean);
