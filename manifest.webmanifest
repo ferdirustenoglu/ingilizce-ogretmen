@@ -1,7 +1,7 @@
 {
-  "name": "İngilizce Öğretmen",
-  "short_name": "İngilizce",
-  "description": "Sesli İngilizce konuşma pratiği",
+  "name": "Cümle Atölyesi",
+  "short_name": "Cümle Atölyesi",
+  "description": "Türkçe cümleleri İngilizceye yazarak kalıp öğren",
   "lang": "tr",
   "start_url": "./index.html#home",
   "scope": "./",
