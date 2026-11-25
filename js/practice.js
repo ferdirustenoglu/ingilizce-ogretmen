@@ -119,15 +119,15 @@ export async function renderPractice(ctx) {
   if (s.done) { location.hash = '#ozet'; return; }
   const item = s.items[s.idx];
   if (!item) {
-    ctx.app.innerHTML = `
-    <div class="page">
-      ${header({ back: '#home', title: '<b>Cümle Atölyesi</b>' })}
-      <div class="card center" id="load">
+    mount(ctx, {
+      top: header({ back: '#home', title: '<b>Cümle Atölyesi</b>' }),
+      mid: `<div class="card center" id="load">
         <div class="dots"><span></span><span></span><span></span></div>
         <p>Cümleler hazırlanıyor…</p>
         <p class="small">Yapay zekâ cümleleri yazıp kontrol ediyor. 10–30 saniye sürebilir.</p>
-      </div>
-    </div>`;
+      </div>`,
+      bot: '',
+    });
     try {
       await ensureItems(ctx, { force: true });
       if (location.hash === '#calis') renderPractice(ctx);
@@ -142,6 +142,30 @@ export async function renderPractice(ctx) {
   else drawWrite(ctx, s, item);
   ensureItems(ctx).catch(() => {});
 }
+
+
+// ---------- Sabit çerçeve: üst (başlık + Türkçe cümle) · orta (kayan) · alt (yazma / düğmeler) ----------
+// Sayfa hiç kaymaz; sadece değişen bölüm yenilenir, böylece ekran zıplamaz.
+function mount(ctx, { top, mid, bot }) {
+  let f = ctx.app.querySelector('.pframe');
+  if (!f) {
+    ctx.app.innerHTML = '<div class="pframe"><div class="ptop"></div><div class="pmid" id="pmid"></div><div class="pbot" id="pbot"></div></div>';
+    f = ctx.app.querySelector('.pframe');
+  }
+  const set = (sel, html, resetScroll) => {
+    const el = f.querySelector(sel);
+    if (html === undefined || (sel === '.ptop' && el.dataset.html === html)) return; // üst kısım aynıysa dokunma
+    el.innerHTML = html;
+    el.dataset.html = html;
+    el.hidden = !html;
+    if (resetScroll) el.scrollTop = 0;
+  };
+  set('.ptop', top);
+  set('.pmid', mid, true);
+  set('.pbot', bot);
+}
+
+const trCard = (item) => `<section class="tr-card"><span class="cap">Türkçe</span><p class="tr-sentence">${highlight(item.tr, item.trFocus)}</p></section>`;
 
 function topBar(s, item) {
   const p = patternById(item.pid);
@@ -174,60 +198,67 @@ function hintPanel(item, i) {
   return `<div class="card hint">${blocks(item.parts.map((x) => ({ ...x, t: initials(x.t) })))}<p class="note">Her kelimenin ilk harfi. Gerisini sen tamamla.</p></div>`;
 }
 
-function drawWrite(ctx, s, item) {
+function writeMid(item) {
   const tab = item.hints ? Math.min(item.tab ?? item.hints - 1, item.hints - 1) : -1;
-  ctx.app.innerHTML = `
-  <div class="page with-composer">
-    ${topBar(s, item)}
-    <section class="card tr-card">
-      <span class="cap">Türkçe</span>
-      <p class="tr-sentence">${highlight(item.tr, item.trFocus)}</p>
-    </section>
-    <div class="hint-tabs" role="group" aria-label="İpuçları">
-      ${HINTS.map((h, i) => {
-        const open = item.hints > i;
-        const nextOne = item.hints === i;
-        return `<button type="button" class="hint-btn${open ? ' open' : ''}${tab === i ? ' active' : ''}" data-hint="${i}" ${open || nextOne ? '' : 'disabled'}>${open || nextOne ? `<b>${i + 1}</b>` : IC.lock} ${h}</button>`;
-      }).join('')}
-    </div>
-    ${tab >= 0 ? hintPanel(item, tab) : '<p class="small">Takılırsan ipuçlarını sırayla aç.</p>'}
-    <button type="button" class="link-btn small-link" id="bad">${IC.flag} Bu Türkçe cümle hatalı / doğal değil</button>
-  </div>
-  <div class="composer">
-    <p class="comp-tr" aria-hidden="true">${highlight(item.tr, item.trFocus)}</p>
-    <div class="comp-row">
-      <label class="sr-only" for="ans">İngilizcesini yaz</label>
-      ${canSpeak(ctx.state.settings) && navigator.mediaDevices ? `<button type="button" class="mic" id="mic" aria-label="Sesle yaz">${IC.mic}</button>` : ''}
-      <textarea id="ans" rows="2" autocomplete="off" autocapitalize="sentences" spellcheck="false" placeholder="İngilizcesini yaz ya da söyle…">${esc(item.draft || '')}</textarea>
-      <button type="button" class="send" id="check" aria-label="Kontrol et">${IC.check}</button>
-    </div>
-    <div class="comp-foot"><span class="small">Enter: kontrol et</span><button type="button" class="link-btn" id="show">Cevabı göster</button></div>
-  </div>`;
+  return (tab >= 0 ? hintPanel(item, tab) : '<p class="small mid-intro">Cümleyi İngilizceye çevir. Takılırsan aşağıdan ipucu aç.</p>')
+    + `<button type="button" class="link-btn small-link" id="bad">${IC.flag} Bu Türkçe cümle hatalı / doğal değil</button>`;
+}
+function tabsHtml(item) {
+  const tab = item.hints ? Math.min(item.tab ?? item.hints - 1, item.hints - 1) : -1;
+  return HINTS.map((h, i) => {
+    const open = item.hints > i;
+    const nextOne = item.hints === i;
+    return `<button type="button" class="hint-btn${open ? ' open' : ''}${tab === i ? ' active' : ''}" data-hint="${i}" ${open || nextOne ? '' : 'disabled'}>${open || nextOne ? `<b>${i + 1}</b>` : IC.lock} ${h}</button>`;
+  }).join('');
+}
+
+function drawWrite(ctx, s, item) {
+  const mic = canSpeak(ctx.state.settings) && navigator.mediaDevices;
+  mount(ctx, {
+    top: topBar(s, item) + trCard(item),
+    mid: writeMid(item),
+    bot: `<div class="hint-tabs" id="tabs" role="group" aria-label="İpuçları">${tabsHtml(item)}</div>
+    <div class="composer">
+      <div class="comp-row">
+        ${mic ? `<button type="button" class="mic" id="mic" aria-label="Sesle yaz">${IC.mic}</button>` : ''}
+        <label class="sr-only" for="ans">İngilizcesini yaz</label>
+        <textarea id="ans" rows="2" autocomplete="off" autocapitalize="sentences" spellcheck="false" placeholder="İngilizcesini yaz ya da söyle…"></textarea>
+        <button type="button" class="send" id="check" aria-label="Kontrol et">${IC.check}</button>
+      </div>
+      <div class="comp-foot"><span class="small">Enter: kontrol et</span><button type="button" class="link-btn" id="show">Cevabı göster</button></div>
+    </div>`,
+  });
 
   const $ = (q) => ctx.app.querySelector(q);
   const ta = $('#ans');
+  ta.value = item.draft || '';
   const btn = $('#check');
   const sync = () => { btn.disabled = !ta.value.trim(); };
   sync();
   let t;
   ta.addEventListener('input', () => { sync(); item.draft = ta.value; clearTimeout(t); t = setTimeout(persist, 500); });
   ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (!btn.disabled) btn.click(); } });
-  ctx.app.querySelectorAll('[data-hint]').forEach((b) => b.addEventListener('click', () => {
+  // Alttaki düğmeler yazma alanından odağı almasın: klavye açık kalsın, ekran oynamasın
+  ctx.app.querySelectorAll('.pbot button').forEach((b) => b.addEventListener('pointerdown', (e) => { if (document.activeElement === ta) e.preventDefault(); }));
+
+  const bindMid = () => $('#bad')?.addEventListener('click', () => reportBad(ctx, s, item));
+  bindMid();
+  $('#tabs').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-hint]');
+    if (!b || b.disabled) return;
     const i = +b.dataset.hint;
     if (item.hints <= i) item.hints = i + 1;
     item.tab = i;
     item.draft = ta.value;
     persist();
-    const focused = document.activeElement === ta;
-    drawWrite(ctx, s, item);
-    if (focused) ctx.app.querySelector('#ans')?.focus();
-  }));
+    $('#tabs').innerHTML = tabsHtml(item); // sadece sekmeler ve orta alan yenilenir
+    mount(ctx, { mid: writeMid(item) });
+    bindMid();
+  });
   btn.addEventListener('click', () => { stopRecording(); submit(ctx, s, item, ta.value.trim()); });
-  $('#show').addEventListener('click', () => reveal(ctx, s, item));
-  $('#bad').addEventListener('click', () => reportBad(ctx, s, item));
-  const mic = $('#mic');
-  if (mic) setupMic(ctx, mic, ta, (text) => {
-    // Söyleneni imlecin olduğu yere (yoksa sona) ekle
+  $('#show').addEventListener('click', () => { stopRecording(); reveal(ctx, s, item); });
+  const micBtn = $('#mic');
+  if (micBtn) setupMic(ctx, micBtn, ta, (text) => {
     const v = ta.value;
     const at = document.activeElement === ta ? ta.selectionStart : v.length;
     const before = v.slice(0, at);
@@ -237,7 +268,6 @@ function drawWrite(ctx, s, item) {
     item.draft = ta.value;
     sync();
     persist();
-    ta.focus();
     const pos = (before + pad + text).length;
     ta.setSelectionRange(pos, pos);
   });
@@ -246,7 +276,7 @@ function drawWrite(ctx, s, item) {
 // ---------- Sesli yazma: dokun → konuş → tekrar dokun ----------
 let recState = null;
 function setupMic(ctx, mic, ta, onText) {
-  const composer = mic.closest('.composer');
+  const composer = mic.closest('.composer') || mic.parentElement;
   const setUi = (mode) => {
     mic.classList.toggle('rec', mode === 'rec');
     mic.classList.toggle('busy', mode === 'busy');
@@ -375,10 +405,9 @@ function drawResult(ctx, s, item) {
   const speakOk = canSpeak(ctx.state.settings);
   const play = (what, label, slow = false) => (speakOk ? `<button type="button" class="pill" data-say="${what}" data-slow="${slow ? 1 : ''}">${IC.speaker} ${label}</button>` : '');
 
-  ctx.app.innerHTML = `
-  <div class="page with-footer">
-    ${topBar(s, item)}
-    <p class="tr-sentence sm">${highlight(item.tr, item.trFocus)}</p>
+  mount(ctx, {
+    top: topBar(s, item) + trCard(item),
+    mid: `
     <div class="banner ${cls}">
       <span class="bi">${c.verdict === 'correct' ? IC.check : '!'}</span>
       <span class="bt"><b>${title}</b><span>${esc(c.summary || text)}</span></span>
@@ -424,13 +453,12 @@ function drawResult(ctx, s, item) {
       ${speakOk ? `<div>${play('daily', 'Dinle')}</div>` : ''}
     </section>
 
-    ${c.mistake ? `<p class="small">Hata defterine eklendi: <b>${esc(mistakeLabel(c.mistake.type))}</b>${c.mistake.rule ? ' · ' + esc(c.mistake.rule) : ''}</p>` : ''}
-  </div>
-  <div class="footer">
+    ${c.mistake ? `<p class="small">Hata defterine eklendi: <b>${esc(mistakeLabel(c.mistake.type))}</b>${c.mistake.rule ? ' · ' + esc(c.mistake.rule) : ''}</p>` : ''}`,
+    bot: `<div class="footer">
     ${c.verdict === 'close' || c.verdict === 'wrong' ? '<button type="button" class="btn" id="retry">Tekrar dene</button>' : ''}
     <button type="button" class="btn btn-primary grow" id="next">${isLast ? 'Bitir' : 'Sıradaki'} ${IC.arrow}</button>
-  </div>`;
-
+    </div>`,
+  });
   ctx.app.querySelectorAll('[data-say]').forEach((b) => b.addEventListener('click', async () => {
     try { await speak(ctx.state.settings, b.dataset.say === 'daily' ? item.daily : c.fixed, !!b.dataset.slow); } catch (e) { toast(e.message); }
   }));
@@ -448,7 +476,6 @@ async function next(ctx, s) {
   s.idx++;
   if (s.idx >= s.target) return finish(ctx, s);
   await persist();
-  window.scrollTo(0, 0);
   renderPractice(ctx);
 }
 

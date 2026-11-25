@@ -127,8 +127,7 @@ p { margin: 0; }
 .ex:last-child { border-bottom: none; }
 
 /* Alıştırma */
-.tr-card { gap: 6px; padding: 14px; }
-.tr-sentence { font-size: 19px; font-weight: 700; line-height: 1.4; }
+.tr-sentence { font-size: 18px; font-weight: 700; line-height: 1.35; }
 .tr-sentence.sm { font-size: 15px; font-weight: 600; color: var(--soft); }
 .tr-sentence mark { background: var(--amber-bg); color: var(--amber); border-radius: 5px; padding: 0 3px; }
 .hint-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
@@ -140,9 +139,16 @@ p { margin: 0; }
 .hint { gap: 8px; }
 .words { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
 
-.with-composer { padding-bottom: 130px; }
-.with-footer { padding-bottom: 86px; }
-.composer, .footer { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; max-width: 560px; margin: 0 auto; background: var(--nav); border-top: 1px solid var(--line); padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); }
+/* Alıştırma ekranı: sabit çerçeve, sayfa kaymaz */
+body.focus-mode { overflow: hidden; }
+.pframe { position: fixed; inset: 0; height: 100dvh; max-width: 560px; margin: 0 auto; display: flex; flex-direction: column; background: var(--bg); }
+.ptop { flex-shrink: 0; padding: 10px 16px 8px; display: flex; flex-direction: column; gap: 8px; }
+.pmid { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 4px 16px 12px; display: flex; flex-direction: column; gap: 10px; }
+.pbot { flex-shrink: 0; background: var(--nav); border-top: 1px solid var(--line); padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 8px; }
+.pbot[hidden] { display: none; }
+.mid-intro { text-align: center; padding: 18px 8px 4px; }
+.tr-card { background: var(--surface); border-radius: 14px; padding: 10px 14px; display: flex; flex-direction: column; gap: 4px; }
+.pbot .hint-tabs .hint-btn { min-height: 32px; font-size: 12px; }
 .comp-row { display: flex; align-items: flex-end; gap: 6px; }
 .comp-row textarea { flex: 1; min-height: 48px; max-height: 120px; resize: none; border-radius: 12px; padding: 10px 12px; background: var(--surface); border: 1.5px solid var(--accent); color: var(--text); font-size: 16px; line-height: 1.35; outline: none; }
 .send { width: 46px; height: 46px; border-radius: 50%; border: none; background: var(--accent); color: var(--bg); display: flex; align-items: center; justify-content: center; flex-shrink: 0; cursor: pointer; }
