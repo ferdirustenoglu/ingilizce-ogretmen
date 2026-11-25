@@ -168,3 +168,25 @@ export async function speak(settings, text, slow = false) {
   current.playbackRate = slow ? 0.85 : 1;
   await current.play();
 }
+
+// ---------- Sesli yazma (OpenAI ses → yazı) ----------
+// Hatalar DÜZELTİLMEDEN, söylendiği gibi yazıya çevrilir (kontrolün anlamı kalsın diye).
+export async function transcribe(settings, blob, seconds) {
+  if (!settings.openaiKey) throw new Error('Sesli yazma için Ayarlar’a OpenAI anahtarı gerekir.');
+  const form = new FormData();
+  const ext = (blob.type || '').includes('mp4') ? 'mp4' : (blob.type || '').includes('ogg') ? 'ogg' : 'webm';
+  form.append('file', blob, 'ses.' + ext);
+  form.append('model', settings.sttModel || 'gpt-4o-transcribe');
+  form.append('language', 'en');
+  form.append('prompt', 'A Turkish learner is saying one English sentence. Write exactly the words spoken, keeping any grammar mistakes. Do not correct, complete or improve the sentence.');
+  form.append('response_format', 'json');
+  const res = await fetch(OPENAI + '/audio/transcriptions', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + settings.openaiKey },
+    body: form,
+  });
+  if (!res.ok) throw await errorOf(res);
+  const j = await res.json();
+  addCost((Math.max(1, seconds || 5) / 60) * 0.006);
+  return String(j.text || '').trim();
+}

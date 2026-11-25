@@ -2,7 +2,7 @@
 // Rotalar: #calis · #ozet
 
 import { db, loadSettings } from './db.js';
-import { speak, stopAudio, hasKey, canSpeak } from './ai.js';
+import { speak, stopAudio, hasKey, canSpeak, transcribe } from './ai.js';
 import { PATTERNS, UNITS, patternById, patternsOfUnit, LEVELS } from './curriculum.js';
 import { mistakeLabel } from './rules.js';
 import {
@@ -41,6 +41,9 @@ function persist() {
   return chain;
 }
 export function resetPracticeCache() { cur = null; genPromise = null; }
+export function stopRecording() {
+  if (recState) { try { recState.rec.stop(); } catch { /* yok */ } recState.stream.getTracks().forEach((t) => t.stop()); recState = null; }
+}
 
 /**
  * Yeni oturum başlat.
@@ -194,7 +197,8 @@ function drawWrite(ctx, s, item) {
     <p class="comp-tr" aria-hidden="true">${highlight(item.tr, item.trFocus)}</p>
     <div class="comp-row">
       <label class="sr-only" for="ans">İngilizcesini yaz</label>
-      <textarea id="ans" rows="2" autocomplete="off" autocapitalize="sentences" spellcheck="false" placeholder="İngilizcesini yaz…">${esc(item.draft || '')}</textarea>
+      ${canSpeak(ctx.state.settings) && navigator.mediaDevices ? `<button type="button" class="mic" id="mic" aria-label="Sesle yaz">${IC.mic}</button>` : ''}
+      <textarea id="ans" rows="2" autocomplete="off" autocapitalize="sentences" spellcheck="false" placeholder="İngilizcesini yaz ya da söyle…">${esc(item.draft || '')}</textarea>
       <button type="button" class="send" id="check" aria-label="Kontrol et">${IC.check}</button>
     </div>
     <div class="comp-foot"><span class="small">Enter: kontrol et</span><button type="button" class="link-btn" id="show">Cevabı göster</button></div>
@@ -218,9 +222,75 @@ function drawWrite(ctx, s, item) {
     drawWrite(ctx, s, item);
     if (focused) ctx.app.querySelector('#ans')?.focus();
   }));
-  btn.addEventListener('click', () => submit(ctx, s, item, ta.value.trim()));
+  btn.addEventListener('click', () => { stopRecording(); submit(ctx, s, item, ta.value.trim()); });
   $('#show').addEventListener('click', () => reveal(ctx, s, item));
   $('#bad').addEventListener('click', () => reportBad(ctx, s, item));
+  const mic = $('#mic');
+  if (mic) setupMic(ctx, mic, ta, (text) => {
+    // Söyleneni imlecin olduğu yere (yoksa sona) ekle
+    const v = ta.value;
+    const at = document.activeElement === ta ? ta.selectionStart : v.length;
+    const before = v.slice(0, at);
+    const after = v.slice(at);
+    const pad = before && !/\s$/.test(before) ? ' ' : '';
+    ta.value = before + pad + text + (after && !/^\s/.test(after) ? ' ' : '') + after;
+    item.draft = ta.value;
+    sync();
+    persist();
+    ta.focus();
+    const pos = (before + pad + text).length;
+    ta.setSelectionRange(pos, pos);
+  });
+}
+
+// ---------- Sesli yazma: dokun → konuş → tekrar dokun ----------
+let recState = null;
+function setupMic(ctx, mic, ta, onText) {
+  const composer = mic.closest('.composer');
+  const setUi = (mode) => {
+    mic.classList.toggle('rec', mode === 'rec');
+    mic.classList.toggle('busy', mode === 'busy');
+    composer.classList.toggle('listening', mode !== 'idle');
+    mic.setAttribute('aria-label', mode === 'rec' ? 'Kaydı bitir' : 'Sesle yaz');
+    ta.placeholder = mode === 'rec' ? 'Dinliyorum… bitince mikrofona tekrar dokun' : mode === 'busy' ? 'Yazıya çevriliyor…' : 'İngilizcesini yaz ya da söyle…';
+  };
+  const stop = () => { if (recState && recState.rec.state === 'recording') recState.rec.stop(); };
+  mic.addEventListener('click', async () => {
+    if (recState) { stop(); return; }
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    } catch {
+      toast('Mikrofon izni verilmedi. Tarayıcı ayarlarından izin ver.');
+      return;
+    }
+    const type = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg'].find((t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || '';
+    const rec = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
+    const chunks = [];
+    const started = Date.now();
+    recState = { rec, stream };
+    rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+    rec.onstop = async () => {
+      clearTimeout(recState.timer);
+      stream.getTracks().forEach((tr) => tr.stop());
+      const seconds = (Date.now() - started) / 1000;
+      recState = null;
+      if (seconds < 0.6) { setUi('idle'); toast('Çok kısa oldu. Dokun, konuş, sonra tekrar dokun.'); return; }
+      setUi('busy');
+      try {
+        const text = await transcribe(ctx.state.settings, new Blob(chunks, { type: rec.mimeType || type || 'audio/webm' }), seconds);
+        if (!document.body.contains(mic)) return; // ekran değiştiyse
+        setUi('idle');
+        if (text) onText(text); else toast('Ses anlaşılamadı, tekrar dene.');
+      } catch (e) {
+        setUi('idle');
+        toast(e.message);
+      }
+    };
+    rec.start();
+    recState.timer = setTimeout(stop, 30000); // en fazla 30 saniye
+    setUi('rec');
+  });
 }
 
 async function reportBad(ctx, s, item) {

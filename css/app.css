@@ -143,7 +143,7 @@ p { margin: 0; }
 .with-composer { padding-bottom: 130px; }
 .with-footer { padding-bottom: 86px; }
 .composer, .footer { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; max-width: 560px; margin: 0 auto; background: var(--nav); border-top: 1px solid var(--line); padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); }
-.comp-row { display: flex; align-items: flex-end; gap: 8px; }
+.comp-row { display: flex; align-items: flex-end; gap: 6px; }
 .comp-row textarea { flex: 1; min-height: 48px; max-height: 120px; resize: none; border-radius: 12px; padding: 10px 12px; background: var(--surface); border: 1.5px solid var(--accent); color: var(--text); font-size: 16px; line-height: 1.35; outline: none; }
 .send { width: 46px; height: 46px; border-radius: 50%; border: none; background: var(--accent); color: var(--bg); display: flex; align-items: center; justify-content: center; flex-shrink: 0; cursor: pointer; }
 .send svg { width: 20px; height: 20px; }
@@ -153,7 +153,11 @@ p { margin: 0; }
 /* Klavye açıkken (yazma alanı odaktayken) Türkçe cümle yazma alanının hemen üstünde görünür */
 .comp-tr { display: none; margin: 0 2px 8px; font-size: 16px; font-weight: 700; line-height: 1.35; color: var(--text); }
 .comp-tr mark { background: var(--amber-bg); color: var(--amber); border-radius: 5px; padding: 0 3px; }
-.composer:focus-within .comp-tr { display: block; }
+.composer:focus-within .comp-tr, .composer.listening .comp-tr { display: block; }
+.mic { width: 46px; height: 46px; border-radius: 50%; border: 1.5px solid var(--line-strong); background: var(--surface); color: var(--accent-text); display: flex; align-items: center; justify-content: center; flex-shrink: 0; cursor: pointer; }
+.mic.rec { background: var(--red); border-color: var(--red); color: var(--bg); animation: micpulse 1.2s infinite; }
+.mic.busy { opacity: 0.6; animation: pulse 1s infinite; }
+@keyframes micpulse { 0% { box-shadow: 0 0 0 0 rgba(255, 138, 154, 0.6); } 70% { box-shadow: 0 0 0 12px rgba(255, 138, 154, 0); } 100% { box-shadow: 0 0 0 0 rgba(255, 138, 154, 0); } }
 .comp-foot { display: flex; align-items: center; justify-content: space-between; padding: 2px 4px 0; }
 .comp-foot .link-btn { min-height: 30px; }
 .footer { display: flex; gap: 8px; }

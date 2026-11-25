@@ -46,6 +46,7 @@ export const DEFAULT_SETTINGS = {
   anthropicKey: '',
   anthropicModel: 'claude-sonnet-5-5',
   ttsModel: 'gpt-4o-mini-tts',
+  sttModel: 'gpt-4o-transcribe',
   voice: 'marin',
 };
 

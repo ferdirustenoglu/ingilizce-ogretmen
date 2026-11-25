@@ -247,7 +247,7 @@ export async function renderSettings(ctx) {
       <button type="button" class="btn danger" id="reset">Tüm ilerlemeyi sıfırla</button>
       <p class="small">API anahtarları yedeğe yazılmaz ve sıfırlamada silinmez.</p>
     </section>
-    <p class="small center">Cümle Atölyesi · v2.1</p>
+    <p class="small center">Cümle Atölyesi · v2.2</p>
   </div>`;
 
   const $ = (q) => app.querySelector(q);

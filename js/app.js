@@ -3,7 +3,7 @@
 import { loadSettings, removeOldApp } from './db.js';
 import { stopAudio } from './ai.js';
 import { renderHome, renderMap, renderCard, renderMistakes, renderSettings } from './screens.js';
-import { renderPractice, renderSummary } from './practice.js';
+import { renderPractice, renderSummary, stopRecording } from './practice.js';
 
 const app = document.getElementById('app');
 const state = { settings: null };
@@ -28,6 +28,7 @@ async function route() {
   const [name, sub] = (location.hash || '#home').slice(1).split('/');
   const render = ROUTES[name] || ROUTES.home;
   stopAudio();
+  stopRecording();
   const tab = name in TAB_OF ? TAB_OF[name] : name;
   document.querySelectorAll('.nav a').forEach((a) => {
     if (a.dataset.tab === tab) a.setAttribute('aria-current', 'page');
