@@ -149,8 +149,10 @@ body.focus-mode { overflow: hidden; }
 .mid-intro { text-align: center; padding: 18px 8px 4px; }
 .tr-card { background: var(--surface); border-radius: 14px; padding: 10px 14px; display: flex; flex-direction: column; gap: 4px; }
 .pbot .hint-tabs .hint-btn { min-height: 32px; font-size: 12px; }
-.comp-row { display: flex; align-items: flex-end; gap: 6px; }
-.comp-row textarea { flex: 1; min-height: 48px; max-height: 120px; resize: none; border-radius: 12px; padding: 10px 12px; background: var(--surface); border: 1.5px solid var(--accent); color: var(--text); font-size: 16px; line-height: 1.35; outline: none; }
+.comp-row { display: flex; align-items: stretch; gap: 8px; }
+/* Sağ elle kullanım: mikrofon ve kontrol düğmesi sağda, üst üste */
+.comp-btns { display: flex; flex-direction: column; gap: 8px; justify-content: flex-end; }
+.comp-row textarea { flex: 1; min-height: 96px; max-height: 140px; resize: none; border-radius: 12px; padding: 10px 12px; background: var(--surface); border: 1.5px solid var(--accent); color: var(--text); font-size: 16px; line-height: 1.35; outline: none; }
 .send { width: 46px; height: 46px; border-radius: 50%; border: none; background: var(--accent); color: var(--bg); display: flex; align-items: center; justify-content: center; flex-shrink: 0; cursor: pointer; }
 .send svg { width: 20px; height: 20px; }
 .send[disabled] { opacity: 0.4; }

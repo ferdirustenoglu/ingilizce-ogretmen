@@ -220,10 +220,12 @@ function drawWrite(ctx, s, item) {
     bot: `<div class="hint-tabs" id="tabs" role="group" aria-label="İpuçları">${tabsHtml(item)}</div>
     <div class="composer">
       <div class="comp-row">
-        ${mic ? `<button type="button" class="mic" id="mic" aria-label="Sesle yaz">${IC.mic}</button>` : ''}
         <label class="sr-only" for="ans">İngilizcesini yaz</label>
-        <textarea id="ans" rows="2" autocomplete="off" autocapitalize="sentences" spellcheck="false" placeholder="İngilizcesini yaz ya da söyle…"></textarea>
-        <button type="button" class="send" id="check" aria-label="Kontrol et">${IC.check}</button>
+        <textarea id="ans" rows="3" autocomplete="off" autocapitalize="sentences" spellcheck="false" placeholder="İngilizcesini yaz ya da söyle…"></textarea>
+        <div class="comp-btns">
+          ${mic ? `<button type="button" class="mic" id="mic" aria-label="Sesle yaz">${IC.mic}</button>` : ''}
+          <button type="button" class="send" id="check" aria-label="Kontrol et">${IC.check}</button>
+        </div>
       </div>
       <div class="comp-foot"><span class="small">Enter: kontrol et</span><button type="button" class="link-btn" id="show">Cevabı göster</button></div>
     </div>`,
