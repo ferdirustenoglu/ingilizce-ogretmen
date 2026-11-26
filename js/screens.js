@@ -10,13 +10,15 @@ import {
 } from './learn.js';
 import { startSession, activeSessionInfo, resetPracticeCache } from './practice.js';
 import { esc, toast, IC, header, patternChips, bar } from './ui.js';
+import { coachSummary, requestLesson, getLesson, ensureLessonContent, lessonStatusLabel, ANALYSIS_WINDOW, LESSON_TRIGGER, PRACTICE_SIZE, analyze } from './coach.js';
 
 // ---------- Ana sayfa ----------
 export async function renderHome(ctx) {
   const { app, state } = ctx;
-  const [profile, mastery, reviews, stats, active, costs] = await Promise.all([
-    loadProfile(), loadMastery(), loadReviews(), loadStats(), activeSessionInfo(), loadCosts(),
+  const [profile, mastery, reviews, stats, active, costs, coach] = await Promise.all([
+    loadProfile(), loadMastery(), loadReviews(), loadStats(), activeSessionInfo(), loadCosts(), coachSummary(),
   ]);
+  const lessonReady = coach.ready[0];
   const due = dueReviews(reviews);
   const learned = PATTERNS.filter((p) => masteryOf(mastery, p.id).learned).length;
   const np = nextPattern(mastery);
@@ -38,6 +40,14 @@ export async function renderHome(ctx) {
       <b>${esc(active.what)}</b>
       ${bar((active.idx / active.target) * 100)}
       <a class="btn btn-primary" href="#calis">Devam et</a>
+    </section>` : ''}
+
+    ${lessonReady ? `
+    <section class="card accent">
+      <div class="row between"><span class="cap">Koç · senin için ders</span><span class="small">${lessonReady.attempt > 1 ? lessonReady.attempt + '. anlatım' : 'yeni'}</span></div>
+      <b class="big">${esc(mistakeLabel(lessonReady.type))}</b>
+      <p class="note">${esc(lessonReady.reason)}</p>
+      <a class="btn btn-primary" href="#ders/${lessonReady.id}">Derse git</a>
     </section>` : ''}
 
     ${fresh ? `
@@ -73,6 +83,12 @@ export async function renderHome(ctx) {
       <div class="row between"><span class="cap">Genel ilerleme</span><span class="small">${learned} / ${PATTERNS.length} kalıp</span></div>
       ${bar((learned / PATTERNS.length) * 100)}
     </section>
+
+    <a class="card coach-mini" href="#hatalar">
+      <div class="row between"><span class="cap">Koç analizi</span><span class="small">${coach.progress} / ${ANALYSIS_WINDOW} cümle</span></div>
+      ${bar((coach.progress / ANALYSIS_WINDOW) * 100, 'thin')}
+      <span class="small">${coach.watching.length ? coach.watching.length + ' konu izlemede · ' : ''}Her ${ANALYSIS_WINDOW} cümlede hatalarını inceleyip sana ders hazırlar.</span>
+    </a>
 
     <div class="grid3">
       <div class="stat"><b>${day.n}</b><span>bugün cümle</span></div>
@@ -163,31 +179,139 @@ export async function renderCard(ctx, id) {
   app.querySelector('#go').addEventListener('click', () => startSession(ctx, { mode: 'learn', pid: p.id }));
 }
 
-// ---------- Hata defteri ----------
+// ---------- Defter: koç, derslerim, hata türleri ----------
 export async function renderMistakes(ctx) {
   const { app } = ctx;
-  const all = await loadMistakes();
+  const [all, cs] = await Promise.all([loadMistakes(), coachSummary()]);
   const types = Object.entries(all).sort((a, b) => b[1].count - a[1].count);
+  const lessons = cs.coach.lessons;
+  const last = (cs.coach.reports || [])[0];
+  const lastBars = last ? Object.entries(last.counts).sort((a, b) => b[1] - a[1]).slice(0, 5) : [];
+  const maxC = lastBars.length ? Math.max(...lastBars.map(([, c]) => c)) : 1;
   app.innerHTML = `
   <div class="page">
-    <div><h1>Hata Defteri</h1><p class="muted">Yaptığın hatalar türlerine göre. Bir türe özel çalışma başlatabilirsin.</p></div>
+    <div><h1>Defter</h1><p class="muted">Koçun hatalarını izler, her ${ANALYSIS_WINDOW} cümlede analiz eder ve sana ders hazırlar.</p></div>
+
+    <section class="card">
+      <div class="row between"><span class="cap">Sonraki analiz</span><span class="small">${cs.progress} / ${ANALYSIS_WINDOW} cümle</span></div>
+      ${bar((cs.progress / ANALYSIS_WINDOW) * 100)}
+      ${last ? `<span class="cap" style="margin-top:4px">Son analiz · ${last.size} cümle · ${last.correct} doğru</span>
+        ${lastBars.length ? lastBars.map(([t, c]) => `<div class="hbar"><span>${esc(mistakeLabel(t))}</span><div class="bar"><div style="width:${(c / maxC) * 100}%; background:${c >= LESSON_TRIGGER ? 'var(--red)' : 'var(--amber)'}"></div></div><b>${c}</b></div>`).join('') : '<p class="note">Bu aralıkta hata yoktu.</p>'}`
+        : '<p class="note">İlk analiz için çalışmaya devam et.</p>'}
+      ${cs.progress >= 8 ? '<button type="button" class="link-btn" id="analyzeNow">Şimdi analiz et</button>' : ''}
+    </section>
+
+    <h2 class="sec">Derslerim</h2>
+    ${lessons.length ? lessons.map((l) => `
+    <a class="card lesson-row" href="#ders/${l.id}">
+      <div class="row between"><b>${esc(mistakeLabel(l.type))}</b><span class="st st-${l.status}">${esc(lessonStatusLabel(l.status))}</span></div>
+      <span class="small">${esc(l.content ? l.content.title : l.reason)}</span>
+    </a>`).join('') : '<p class="small">Henüz ders yok. Bir konuda tekrar tekrar hata yaparsan koç sana ders hazırlar.</p>'}
+
+    <h2 class="sec">Hata türleri</h2>
     ${types.length ? types.map(([t, x]) => `
     <section class="card">
       <div class="row between"><b>${esc(mistakeLabel(t))}</b><span class="count">${x.count} kez</span></div>
       ${x.rules.length ? `<p class="note">${esc(x.rules[0])}</p>` : ''}
       <div class="col tiny-gap">${x.examples.slice(0, 3).map((e) => `<div class="corr"><span class="small">${esc(e.tr)}</span><span><span class="t-red">${esc(e.wrong)}</span> → <span class="t-green">${esc(e.right)}</span></span></div>`).join('')}</div>
       <div class="row">
-        <button type="button" class="btn btn-primary grow" data-practice="${t}">Bu hatayı çalış (6 cümle)</button>
+        <button type="button" class="btn btn-primary grow" data-lesson="${t}">${lessons.some((l) => l.type === t && l.status !== 'learned') ? 'Derse git' : 'Bu konuda ders hazırla'}</button>
+        <button type="button" class="btn" data-practice="${t}">6 cümle</button>
         <button type="button" class="btn" data-clear="${t}" aria-label="${esc(mistakeLabel(t))} kaydını sil">Sil</button>
       </div>
     </section>`).join('') : '<section class="card center"><p>Henüz hata kaydı yok.</p><p class="small">Çalıştıkça yanlış yaptığın konular burada birikir.</p></section>'}
   </div>`;
+  app.querySelector('#analyzeNow')?.addEventListener('click', async () => {
+    const r = await analyze();
+    toast(r && r.newLesson ? 'Analiz tamam: senin için yeni bir ders hazır.' : 'Analiz tamam.');
+    renderMistakes(ctx);
+  });
+  app.querySelectorAll('[data-lesson]').forEach((b) => b.addEventListener('click', async () => {
+    const l = await requestLesson(b.dataset.lesson);
+    location.hash = '#ders/' + l.id;
+  }));
   app.querySelectorAll('[data-practice]').forEach((b) => b.addEventListener('click', () => startSession(ctx, { mode: 'mistake', type: b.dataset.practice })));
   app.querySelectorAll('[data-clear]').forEach((b) => b.addEventListener('click', async () => {
     if (!confirm('Bu hata türünün kaydı silinsin mi?')) return;
     await clearMistakeType(b.dataset.clear);
     renderMistakes(ctx);
   }));
+}
+
+// ---------- Ders (koçun hazırladığı kişisel özet) ----------
+export async function renderLesson(ctx, id) {
+  const { app, state } = ctx;
+  let l = await getLesson(id);
+  if (!l) { location.hash = '#hatalar'; return; }
+  const head = header({ back: '#hatalar', title: `<span class="small">Koç dersi · ${esc(lessonStatusLabel(l.status))}${l.attempt > 1 ? ' · ' + l.attempt + '. anlatım' : ''}</span><h1>${esc(mistakeLabel(l.type))}</h1>` });
+  if (!l.content) {
+    app.innerHTML = `<div class="page">${head}<div class="card center" id="load"><div class="dots"><span></span><span></span><span></span></div><p>Ders hazırlanıyor…</p><p class="small">Koç senin yanlış cümlelerini inceleyip sana özel bir anlatım yazıyor.</p></div></div>`;
+    try {
+      const profile = await loadProfile();
+      l = await ensureLessonContent(state.settings, id, profile.level);
+    } catch (e) {
+      const box = app.querySelector('#load');
+      if (box) box.innerHTML = `<p class="err">${esc(e.message)}</p><button type="button" class="btn btn-primary" id="again">Tekrar dene</button>`;
+      app.querySelector('#again')?.addEventListener('click', () => renderLesson(ctx, id));
+      return;
+    }
+    if (!location.hash.startsWith('#ders/')) return;
+  }
+  const c = l.content;
+  const speakOk = canSpeak(state.settings);
+  app.innerHTML = `
+  <div class="page">
+    ${head}
+    <h2 class="lesson-title">${esc(c.title)}</h2>
+    ${c.summary ? `<section class="card accent"><span class="cap">Sende gördüğüm</span><p>${esc(c.summary)}</p></section>` : ''}
+    ${c.why ? `<p class="lead">${esc(c.why)}</p>` : ''}
+    ${c.rules.map((r, i) => `
+    <section class="card">
+      <span class="cap">Kural ${i + 1}</span>
+      <p><b>${esc(r.rule)}</b></p>
+      ${r.pattern ? `<p class="formula">${esc(r.pattern)}</p>` : ''}
+      ${r.examples.map((e) => `<div class="ex"><span class="row between"><b>${esc(e.en)}</b>${speakOk ? `<button type="button" class="icon-btn" data-say="${esc(e.en)}" aria-label="Dinle">${IC.speaker}</button>` : ''}</span><span class="small">${esc(e.tr)}</span></div>`).join('')}
+    </section>`).join('')}
+    ${c.table && c.table.rows.length ? `
+    <section class="card"><span class="cap">Özet tablo</span>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr>${c.table.headers.map((h) => `<th>${esc(h)}</th>`).join('')}</tr></thead>
+      <tbody>${c.table.rows.map((r) => `<tr>${r.map((x) => `<td>${esc(x)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
+    </section>` : ''}
+    ${c.mine.length ? `
+    <section class="card warn"><span class="cap">Senin cümlelerin</span>
+      ${c.mine.map((m) => `<div class="corr"><span class="t-red">✗ ${esc(m.wrong)}</span><span class="t-green">✓ ${esc(m.right)}</span>${m.note ? `<span class="small">${esc(m.note)}</span>` : ''}</div>`).join('')}
+    </section>` : ''}
+    ${c.tips.length ? `<section class="card"><span class="cap">Akılda tut</span>${c.tips.map((t) => `<p class="note">• ${esc(t)}</p>`).join('')}</section>` : ''}
+    ${c.quiz.length ? `
+    <section class="card"><span class="cap">Mini test</span>
+      ${c.quiz.map((q, i) => `<div class="quiz" data-q="${i}">
+        <p><b>${i + 1}.</b> ${esc(q.q)}</p>
+        <div class="row wrap">${q.options.map((o) => `<button type="button" class="pill" data-opt="${esc(o)}">${esc(o)}</button>`).join('')}</div>
+        <p class="small quiz-ex" hidden></p>
+      </div>`).join('')}
+    </section>` : ''}
+    ${l.status === 'learned'
+      ? '<section class="card green"><p>Bu konuyu öğrendin. İstersen yine de alıştırma yapabilirsin.</p></section>'
+      : `<p class="small">Dersi çalıştıktan sonra ${PRACTICE_SIZE} cümleyle dene. Bu konuda en fazla 1 hata yaparsan konu izlemeye alınır.</p>`}
+    <button type="button" class="btn btn-primary" id="practice">Çalıştım, ${PRACTICE_SIZE} cümleyle dene</button>
+  </div>`;
+  app.querySelectorAll('[data-say]').forEach((b) => b.addEventListener('click', async () => {
+    try { await speak(state.settings, b.dataset.say); } catch (e) { toast(e.message); }
+  }));
+  app.querySelectorAll('.quiz').forEach((box) => {
+    const q = c.quiz[+box.dataset.q];
+    box.querySelectorAll('[data-opt]').forEach((b) => b.addEventListener('click', () => {
+      if (box.dataset.done) return;
+      box.dataset.done = '1';
+      const ok = b.dataset.opt.toLowerCase() === q.answer.toLowerCase();
+      b.classList.add(ok ? 'ok' : 'bad');
+      if (!ok) box.querySelectorAll('[data-opt]').forEach((x) => { if (x.dataset.opt.toLowerCase() === q.answer.toLowerCase()) x.classList.add('ok'); });
+      const ex = box.querySelector('.quiz-ex');
+      ex.hidden = false;
+      ex.textContent = (ok ? 'Doğru! ' : 'Doğrusu: ' + q.answer + '. ') + (q.explain || '');
+    }));
+  });
+  app.querySelector('#practice').addEventListener('click', () => startSession(ctx, { mode: 'lesson', lessonId: l.id }));
 }
 
 // ---------- Ayarlar ----------
@@ -247,7 +371,7 @@ export async function renderSettings(ctx) {
       <button type="button" class="btn danger" id="reset">Tüm ilerlemeyi sıfırla</button>
       <p class="small">API anahtarları yedeğe yazılmaz ve sıfırlamada silinmez.</p>
     </section>
-    <p class="small center">Cümle Atölyesi · v2.4</p>
+    <p class="small center">Cümle Atölyesi · v2.5</p>
   </div>`;
 
   const $ = (q) => app.querySelector(q);

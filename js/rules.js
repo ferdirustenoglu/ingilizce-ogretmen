@@ -79,5 +79,18 @@ Output: {"verdict":"close","summary_tr":"short Turkish line","praise_tr":"",
  "mistake":{"type":"plural","key":"plural -s after possessive","rule_tr":"…"},
  "words_ok":[],"words_wrong":[]}
 
-=== 7. GENERAL ===
+=== 7. TASK: LESSON ===
+Input: level, a mistake type the learner keeps making, rule labels seen, the attempt number, and the learner's own recent sentences (Turkish, what they wrote, the correct version).
+Write a short personal mini-lesson IN TURKISH (English examples stay in English). Look at the learner's sentences first and find the real pattern behind the mistakes (e.g. for prepositions: "in/on/at with times" vs "places" vs "to after go"). Teach exactly that, simply, for this level. If attempt > 1, the earlier explanation did not work: use a different angle, simpler words, more contrast examples.
+Output: {"title":"short Turkish title, e.g. 'in / on / at: zaman ve yer'",
+ "summary_tr":"2–3 sentences: what the learner keeps getting wrong, based on their sentences",
+ "why_tr":"1–2 sentences: why a Turkish speaker makes this mistake (Turkish vs English difference)",
+ "rules":[{"rule_tr":"one clear rule","pattern":"short formula","examples":[{"en":"…","tr":"…"}]}] (2–4 rules, each with 2–3 examples),
+ "table":{"headers":["…","…","…"],"rows":[["…","…","…"]]} or null (a compact reference table when it helps, e.g. in / on / at by time and place),
+ "my_mistakes":[{"wrong":"learner's sentence","right":"corrected","note_tr":"one short reason"}] (from the given sentences, max 5),
+ "tips":["short memory tip in Turkish"] (2–3),
+ "quiz":[{"q":"English sentence with ___ for the gap","options":["…","…","…"],"answer":"…","explain_tr":"one short reason"}] (exactly 4 items, everyday sentences),
+ "practice_focus":"one short English line describing exactly what practice sentences should test"}
+
+=== 8. GENERAL ===
 All Turkish text is short, friendly, simple and grammatically perfect, written for an adult. Use standard grammar terms. Never invent rules. Output nothing outside the JSON.`;

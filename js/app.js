@@ -2,7 +2,7 @@
 
 import { loadSettings, removeOldApp } from './db.js';
 import { stopAudio } from './ai.js';
-import { renderHome, renderMap, renderCard, renderMistakes, renderSettings } from './screens.js';
+import { renderHome, renderMap, renderCard, renderMistakes, renderLesson, renderSettings } from './screens.js';
 import { renderPractice, renderSummary, stopRecording } from './practice.js';
 
 const app = document.getElementById('app');
@@ -18,11 +18,12 @@ const ROUTES = {
   harita: () => renderMap(ctx),
   kart: (sub) => renderCard(ctx, sub),
   hatalar: () => renderMistakes(ctx),
+  ders: (sub) => renderLesson(ctx, sub),
   ayarlar: () => renderSettings(ctx),
   calis: () => renderPractice(ctx),
   ozet: () => renderSummary(ctx),
 };
-const TAB_OF = { kart: 'harita', calis: '', ozet: '' };
+const TAB_OF = { kart: 'harita', ders: 'hatalar', calis: '', ozet: '' };
 
 async function route() {
   const [name, sub] = (location.hash || '#home').slice(1).split('/');

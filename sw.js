@@ -1,6 +1,6 @@
 // Uygulama kabuğunu önbelleğe alır. Her açılışta önce ağdan güncel dosya denenir.
 // Yapay zekâ çağrıları önbelleğe alınmaz.
-const CACHE = 'cumle-atolyesi-v5';
+const CACHE = 'cumle-atolyesi-v6';
 const SHELL = [
   './',
   './index.html',
@@ -14,6 +14,7 @@ const SHELL = [
   './js/ui.js',
   './js/screens.js',
   './js/practice.js',
+  './js/coach.js',
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png',

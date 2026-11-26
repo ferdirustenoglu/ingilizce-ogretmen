@@ -229,3 +229,23 @@ body.focus-mode { overflow: hidden; }
 .nav a[aria-current='page'] { color: var(--accent-text); font-weight: 700; }
 
 .toast { position: fixed; left: 50%; bottom: calc(80px + env(safe-area-inset-bottom)); transform: translateX(-50%); background: var(--surface-2); color: var(--text); border: 1px solid var(--line-strong); padding: 10px 14px; border-radius: 12px; font-size: 13px; z-index: 50; max-width: 90vw; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); }
+
+/* Koç ve dersler */
+.coach-mini { text-decoration: none; color: var(--text); }
+.sec { margin: 6px 0 0; font-size: 14px; font-weight: 800; }
+.lesson-row { text-decoration: none; color: var(--text); }
+.st { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 99px; }
+.st-ready { background: var(--amber-bg); color: var(--amber); }
+.st-watching { background: #1E2A5C; color: var(--accent-text); }
+.st-learned { background: var(--green-bg); color: var(--green-text); }
+.hbar { display: grid; grid-template-columns: 110px 1fr 22px; align-items: center; gap: 8px; font-size: 12.5px; }
+.hbar b { text-align: right; }
+.lesson-title { margin: 0; font-size: 17px; font-weight: 800; }
+.tbl-wrap { overflow-x: auto; }
+.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+.tbl th { text-align: left; color: var(--muted); font-size: 11px; font-weight: 700; padding: 6px 8px; border-bottom: 1px solid var(--line-strong); }
+.tbl td { padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.quiz { display: flex; flex-direction: column; gap: 6px; padding: 8px 0; border-top: 1px solid var(--line); }
+.quiz:first-of-type { border-top: none; }
+.pill.ok { background: var(--green-bg); border-color: var(--green); color: var(--green-text); }
+.pill.bad { background: var(--red-bg); border-color: var(--red); color: var(--red); }

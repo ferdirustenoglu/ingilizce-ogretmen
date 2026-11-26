@@ -12,6 +12,7 @@ import {
   recordMistake, loadMistakes, recordAnswer, markBad, loadStats, ROLE_LABELS,
 } from './learn.js';
 import { esc, toast, IC, header, patternChips, blocks, highlight, bar } from './ui.js';
+import { logAnswer, lessonSpecs, lessonPracticeDone, getLesson } from './coach.js';
 
 const LEARN_FORMS = [
   'short positive sentence',
@@ -58,7 +59,7 @@ export async function startSession(ctx, opts) {
   }
   const s = {
     id: 's' + Date.now().toString(36),
-    mode: opts.mode, pid: opts.pid || null, mtype: opts.type || null,
+    mode: opts.mode, pid: opts.pid || null, mtype: opts.type || null, lessonId: opts.lessonId || null,
     specs: [], items: [], idx: 0, startedAt: new Date().toISOString(), done: false,
   };
   if (opts.mode === 'learn') {
@@ -73,6 +74,11 @@ export async function startSession(ctx, opts) {
     if (!pids.length) pids = ['u1-article'];
     const focus = `${mistakeLabel(opts.type)} (${m.rules[0] || 'the learner keeps making this kind of mistake'})`;
     s.specs = Array.from({ length: 6 }, (_, i) => ({ pid: pids[i % pids.length], form: 'natural sentence', focus }));
+  } else if (opts.mode === 'lesson') {
+    const l = await getLesson(opts.lessonId);
+    if (!l) { toast('Ders bulunamadı.'); return; }
+    s.mtype = l.type;
+    s.specs = await lessonSpecs(opts.lessonId);
   } else if (opts.mode === 'review') {
     const due = dueReviews(await loadReviews()).slice(0, 10);
     if (!due.length) { toast('Bugün tekrar edilecek cümle yok.'); return; }
@@ -172,6 +178,7 @@ function topBar(s, item) {
   const title = s.mode === 'placement' ? '<b>Seviye testi</b>'
     : s.mode === 'review' ? '<b>Tekrar</b>'
       : s.mode === 'mistake' ? `<b>${esc(mistakeLabel(s.mtype))} çalışması</b>`
+        : s.mode === 'lesson' ? `<b>Ders alıştırması: ${esc(mistakeLabel(s.mtype))}</b>`
         : p ? patternChips(p) : '<b>Alıştırma</b>';
   const sub = `${p && s.mode !== 'placement' ? p.title + ' · ' : ''}Cümle ${s.idx + 1} / ${s.target}`;
   return header({ back: '#home', title, sub }) + bar((s.idx / s.target) * 100, 'thin');
@@ -346,6 +353,18 @@ async function reportBad(ctx, s, item) {
 // İlk denemenin sonucunu kaydet (ustalık, tekrar, hata defteri, istatistik)
 async function recordFirst(s, item, result, check, text) {
   await recordAnswer(result === 'first', item.tr);
+  item.firstTypes = [...new Set([...((check && check.explain) || []).map((e) => e.type).filter(Boolean), ...(check && check.mistake ? [check.mistake.type] : [])])];
+  // Koç günlüğü: her 25 cevapta bir analiz
+  const note = await logAnswer({ item, text, check, verdict: check ? check.verdict : 'shown' });
+  if (note) {
+    s.coachNotes = [...(s.coachNotes || []), {
+      newLesson: note.newLesson ? { id: note.newLesson.id, type: note.newLesson.type } : null,
+      learned: note.learned.map((l) => l.type), retaught: note.retaught.map((l) => ({ id: l.id, type: l.type })),
+    }];
+    if (note.newLesson) toast(`Koç: “${mistakeLabel(note.newLesson.type)}” konusunda senin için ders hazırladım.`);
+    else if (note.learned.length) toast(`Koç: “${mistakeLabel(note.learned[0].type)}” konusunu öğrendin!`);
+    else toast('Koç son 25 cümleni analiz etti.');
+  }
   if (s.mode !== 'retry') await updateMastery(item.pid, result);
   if (s.mode === 'review') await reviewDone(item.id, result === 'first');
   else if (result !== 'first') await addReview(item);
@@ -497,6 +516,7 @@ async function finish(ctx, s) {
     await saveProfile(profile);
   }
   if (s.mode === 'learn') s.endScore = masteryOf(await loadMastery(), s.pid).score;
+  if (s.mode === 'lesson') s.lessonResult = await lessonPracticeDone(s.lessonId, s.items.slice(0, s.target));
   await persist();
   location.hash = '#ozet';
 }
@@ -518,6 +538,18 @@ export async function renderSummary(ctx) {
 
   let headline = pct >= 75 ? 'Harika çalıştın' : pct >= 50 ? 'İyi gidiyorsun' : 'Bu kalıba biraz daha çalışalım';
   let extra = '';
+  if (s.mode === 'lesson' && s.lessonResult) {
+    const r = s.lessonResult;
+    headline = r.passed ? 'Ders alıştırmasını geçtin' : 'Bu konuya bir daha bakalım';
+    extra += r.passed
+      ? `<section class="card green"><span class="cap">Koç</span><p>${esc(mistakeLabel(s.mtype))} konusunda 6 cümlede ${r.errors} hata yaptın. Konu <b>izlemeye</b> alındı: sonraki 25 cümlede de en fazla 1 hata yaparsan öğrenildi sayılacak.</p></section>`
+      : `<section class="card warn"><span class="cap">Koç</span><p>${esc(mistakeLabel(s.mtype))} konusunda 6 cümlede ${r.errors} hata yaptın. Dersi farklı bir anlatımla yeniden hazırlıyorum.</p><a class="btn btn-primary" href="#ders/${s.lessonId}">Dersi tekrar oku</a></section>`;
+  }
+  (s.coachNotes || []).forEach((n) => {
+    if (n.newLesson) extra += `<section class="card accent"><span class="cap">Koç analizi</span><p>Son 25 cümleni inceledim. En çok <b>${esc(mistakeLabel(n.newLesson.type))}</b> konusunda hata yapıyorsun; senin için kısa bir ders hazırladım.</p><a class="btn btn-primary" href="#ders/${n.newLesson.id}">Derse git</a></section>`;
+    n.learned.forEach((t) => { extra += `<section class="card green"><span class="cap">Koç analizi</span><p><b>${esc(mistakeLabel(t))}</b> konusunu öğrendin. Son 25 cümlede neredeyse hiç hata yapmadın.</p></section>`; });
+    n.retaught.forEach((x) => { extra += `<section class="card warn"><span class="cap">Koç analizi</span><p><b>${esc(mistakeLabel(x.type))}</b> konusunda hâlâ hata yapıyorsun. Konuyu farklı bir yoldan tekrar anlatacağım.</p><a class="btn" href="#ders/${x.id}">Dersi aç</a></section>`; });
+  });
   if (s.mode === 'placement' && s.placement) {
     headline = 'Seviyen belirlendi';
     extra = `<section class="card"><p>Başlangıç: <b>${s.placement.startUnit}. Ünite: ${esc(unitTitle(s.placement.startUnit))}</b> (seviye ${esc(s.placement.level)}).</p>
@@ -559,7 +591,7 @@ export async function activeSessionInfo() {
   const s = await getSession();
   if (!s || s.done) return null;
   const p = s.pid ? patternById(s.pid) : null;
-  const what = s.mode === 'placement' ? 'Seviye testi' : s.mode === 'review' ? 'Tekrar' : s.mode === 'mistake' ? mistakeLabel(s.mtype) + ' çalışması' : s.mode === 'retry' ? 'Hatalı cümleler' : p ? p.title : 'Alıştırma';
+  const what = s.mode === 'placement' ? 'Seviye testi' : s.mode === 'review' ? 'Tekrar' : s.mode === 'lesson' ? 'Ders alıştırması: ' + mistakeLabel(s.mtype) : s.mode === 'mistake' ? mistakeLabel(s.mtype) + ' çalışması' : s.mode === 'retry' ? 'Hatalı cümleler' : p ? p.title : 'Alıştırma';
   return { what, idx: s.idx, target: s.target };
 }
 
